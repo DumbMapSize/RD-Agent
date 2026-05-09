@@ -4,10 +4,10 @@ qlib_init:
 market: &market csi300
 benchmark: &benchmark SH000300
 data_handler_config: &data_handler_config
-    start_time: 2008-01-01
-    end_time: 2020-08-01
-    fit_start_time: 2008-01-01
-    fit_end_time: 2014-12-31
+    start_time: 2017-05-10
+    end_time: 2026-05-08
+    fit_start_time: 2017-05-10
+    fit_end_time: 2025-04-08
     instruments: *market
     infer_processors:
         - class: FilterCol
@@ -29,7 +29,7 @@ data_handler_config: &data_handler_config
         - class: CSRankNorm
           kwargs:
               fields_group: label
-    label: ["Ref($close, -2) / Ref($close, -1) - 1"] 
+    label: ["Ref($close, -2) / Ref($open, -1) - 1"] 
 
 port_analysis_config: &port_analysis_config
     strategy:
@@ -37,16 +37,17 @@ port_analysis_config: &port_analysis_config
         module_path: qlib.contrib.strategy
         kwargs:
             signal: <PRED>
-            topk: 50
-            n_drop: 5
+            topk: 20
+            n_drop: 2
     backtest:
-        start_time: 2017-01-01
-        end_time: 2020-08-01
+        start_time: 2025-10-13
+        end_time: 2026-05-08
         account: 100000000
         benchmark: *benchmark
         exchange_kwargs:
+            codes: *market
             limit_threshold: 0.095
-            deal_price: close
+            deal_price: open
             open_cost: 0.0005
             close_cost: 0.0015
             min_cost: 5
@@ -78,9 +79,9 @@ task:
                 module_path: qlib.contrib.data.handler
                 kwargs: *data_handler_config
             segments:
-                train: [2008-01-01, 2014-12-31]
-                valid: [2015-01-01, 2016-12-31]
-                test: [2017-01-01, 2020-08-01]
+                train: [2017-05-10, 2025-04-08]
+                valid: [2025-04-09, 2025-10-10]
+                test: [2025-10-13, 2026-05-08]
             {% if step_len %}step_len: {{ step_len }}{% endif %}
     record: 
         - class: SignalRecord
