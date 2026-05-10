@@ -11,7 +11,7 @@ data_handler_config: &data_handler_config
     instruments: *market
     data_loader:
         class: StaticSafeNestedDataLoader
-        module_path: qlib_static_safe_loader
+        module_path: qlib_static_safe_loader.py
         kwargs:
             dataloader_l:
                 - class: qlib.contrib.data.loader.Alpha158DL
