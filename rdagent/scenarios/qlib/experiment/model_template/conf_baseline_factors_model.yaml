@@ -10,13 +10,6 @@ data_handler_config: &data_handler_config
     fit_end_time: 2025-04-08
     instruments: *market
     infer_processors:
-        - class: FilterCol
-          kwargs:
-              fields_group: feature
-              col_list: ["RESI5", "WVMA5", "RSQR5", "KLEN", "RSQR10", "CORR5", "CORD5", "CORR10", 
-                            "ROC60", "RESI10", "VSTD5", "RSQR60", "CORR60", "WVMA60", "STD5", 
-                            "RSQR20", "CORD60", "CORD10", "CORR20", "KLOW"
-                        ]
         - class: RobustZScoreNorm
           kwargs:
               fields_group: feature
@@ -67,7 +60,7 @@ task:
             GPU: 0
             pt_model_uri: "model.model_cls"
             pt_model_kwargs: {
-                "num_features": 20,
+                "num_features": 158,
                 {% if num_timesteps %}num_timesteps: {{ num_timesteps }}{% endif %}
             }                    
     dataset:

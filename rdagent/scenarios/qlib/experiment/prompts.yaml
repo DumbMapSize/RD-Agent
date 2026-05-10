@@ -256,4 +256,4 @@ qlib_model_rich_style_description: |-
 qlib_model_experiment_setting: |-
   | Dataset 📊 | Model 🤖    | Factors 🌟       | Data Split  🧮                                   |
   |---------|----------|---------------|-------------------------------------------------|
-  | CSI300  | RDAgent-dev | 20 factors (Alpha158)  | Train: 2017-05-10 to 2025-04-08 <br> Valid: 2025-04-09 to 2025-10-10 <br> Test &nbsp;: 2025-10-13 to 2026-05-06 |
+  | CSI300  | RDAgent-dev | Alpha158  | Train: 2017-05-10 to 2025-04-08 <br> Valid: 2025-04-09 to 2025-10-10 <br> Test &nbsp;: 2025-10-13 to 2026-05-06 |
