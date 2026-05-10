@@ -3,6 +3,7 @@ Quant (Factor & Model) workflow with session control
 """
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import fire
@@ -124,6 +125,8 @@ def main(
     loop_n: int | None = None,
     all_duration: str | None = None,
     checkout: bool = True,
+    checkout_path: str | None = None,
+    replace_timer: bool = True,
 ):
     """
     Auto R&D Evolving loop for fintech factors.
@@ -131,10 +134,13 @@ def main(
     .. code-block:: python
         dotenv run -- python rdagent/app/qlib_rd_loop/quant.py $LOG_PATH/__session__/1/0_propose  --step_n 1   # `step_n` is a optional paramter
     """
+    if checkout_path is not None:
+        checkout = Path(checkout_path)
+
     if path is None:
         quant_loop = QuantRDLoop(QUANT_PROP_SETTING)
     else:
-        quant_loop = QuantRDLoop.load(path, checkout=checkout)
+        quant_loop = QuantRDLoop.load(path, checkout=checkout, replace_timer=replace_timer)
 
     asyncio.run(quant_loop.run(step_n=step_n, loop_n=loop_n, all_duration=all_duration))
 
