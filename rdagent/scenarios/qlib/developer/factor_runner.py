@@ -61,7 +61,7 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
         concat_feature = pd.concat([SOTA_feature, new_feature], axis=1)
         IC_max = (
             concat_feature.groupby("datetime")
-            .parallel_apply(
+            .apply(
                 lambda x: self.calculate_information_coefficient(x, SOTA_feature.shape[1], new_feature.shape[1])
             )
             .mean()
