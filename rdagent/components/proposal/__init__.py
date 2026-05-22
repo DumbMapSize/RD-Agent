@@ -15,6 +15,54 @@ from rdagent.utils.agent.tpl import T
 from rdagent.utils.workflow import wait_retry
 
 
+def _target_to_external_knowledge_key(targets: str) -> str | None:
+    target = targets.strip().lower()
+    if target in {"factor", "factors"}:
+        return "factor"
+    if target in {"model", "models", "model tuning"}:
+        return "model"
+    return None
+
+
+def _normalise_external_knowledge(plan: ExperimentPlan | None) -> dict[str, str]:
+    if not plan:
+        return {}
+    raw = plan.get("external_knowledge")
+    if raw is None and plan.get("user_instruction"):
+        raw = {"general": plan["user_instruction"]}
+    if isinstance(raw, str):
+        return {"general": raw}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        key: str(raw.get(key, "")).strip()
+        for key in ("general", "factor", "model")
+        if str(raw.get(key, "")).strip()
+    }
+
+
+def _compose_rag_with_external_knowledge(base_rag: str | None, plan: ExperimentPlan | None, targets: str) -> str | None:
+    external = _normalise_external_knowledge(plan)
+    action_key = _target_to_external_knowledge_key(targets)
+    selected = []
+    if external.get("general"):
+        selected.append(external["general"])
+    if action_key and external.get(action_key):
+        selected.append(external[action_key])
+    if not selected:
+        return base_rag
+
+    external_block = (
+        "External research knowledge is provided as candidate directions. "
+        "Use it to inform, not dictate, hypothesis generation; "
+        "prioritize observed experimental feedback over this context.\n\n"
+        + "\n\n".join(selected)
+    )
+    if base_rag:
+        return f"{base_rag}\n\n{external_block}"
+    return external_block
+
+
 class LLMHypothesisGen(HypothesisGen):
     def __init__(self, scen: Scenario):
         super().__init__(scen)
@@ -32,6 +80,7 @@ class LLMHypothesisGen(HypothesisGen):
         plan: ExperimentPlan | None = None,
     ) -> Hypothesis:
         context_dict, json_flag = self.prepare_context(trace)
+        context_dict["RAG"] = _compose_rag_with_external_knowledge(context_dict.get("RAG"), plan, self.targets)
 
         system_prompt = T(".prompts:hypothesis_gen.system_prompt").r(
             targets=self.targets,

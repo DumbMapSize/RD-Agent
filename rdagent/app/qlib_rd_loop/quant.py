@@ -3,6 +3,7 @@ Quant (Factor & Model) workflow with session control
 """
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,25 @@ from rdagent.core.scenario import Scenario
 from rdagent.core.utils import import_class
 from rdagent.log import rdagent_logger as logger
 from rdagent.scenarios.qlib.proposal.quant_proposal import QuantTrace
+
+
+def _load_external_knowledge_file(knowledge_file: str) -> dict[str, str]:
+    path = Path(knowledge_file)
+    content = path.read_text(encoding="utf-8")
+    try:
+        raw = json.loads(content)
+    except json.JSONDecodeError:
+        return {"general": content.strip(), "factor": "", "model": ""}
+
+    if isinstance(raw, str):
+        return {"general": raw.strip(), "factor": "", "model": ""}
+    if not isinstance(raw, dict):
+        return {"general": json.dumps(raw, ensure_ascii=False, indent=2), "factor": "", "model": ""}
+
+    return {
+        key: str(raw.get(key, "")).strip()
+        for key in ("general", "factor", "model")
+    }
 
 
 class QuantRDLoop(RDLoop):
@@ -63,6 +83,7 @@ class QuantRDLoop(RDLoop):
         self.model_summarizer: Experiment2Feedback = import_class(PROP_SETTING.model_summarizer)(scen)
         logger.log_object(self.model_summarizer, tag="model summarizer")
 
+        self.plan: dict[str, Any] = {}
         self.trace = QuantTrace(scen=scen)
         super(RDLoop, self).__init__()
 
@@ -127,6 +148,7 @@ def main(
     checkout: bool = True,
     checkout_path: str | None = None,
     replace_timer: bool = True,
+    knowledge_file: str | None = None,
 ):
     """
     Auto R&D Evolving loop for fintech factors.
@@ -141,6 +163,11 @@ def main(
         quant_loop = QuantRDLoop(QUANT_PROP_SETTING)
     else:
         quant_loop = QuantRDLoop.load(path, checkout=checkout, replace_timer=replace_timer)
+
+    if knowledge_file is not None:
+        if not hasattr(quant_loop, "plan") or quant_loop.plan is None:
+            quant_loop.plan = {}
+        quant_loop.plan["external_knowledge"] = _load_external_knowledge_file(knowledge_file)
 
     asyncio.run(quant_loop.run(step_n=step_n, loop_n=loop_n, all_duration=all_duration))
 

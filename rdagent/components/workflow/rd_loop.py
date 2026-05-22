@@ -43,7 +43,7 @@ class RDLoop(LoopBase, metaclass=LoopMeta):
 
     # excluded steps
     def _propose(self):
-        hypothesis = self.hypothesis_gen.gen(self.trace)
+        hypothesis = self.hypothesis_gen.gen(self.trace, getattr(self, "plan", None))
         logger.log_object(hypothesis, tag="hypothesis generation")
         return hypothesis
 
