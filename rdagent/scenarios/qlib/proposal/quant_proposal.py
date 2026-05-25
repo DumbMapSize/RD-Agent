@@ -30,11 +30,13 @@ class QlibQuantHypothesis(Hypothesis):
         concise_justification: str,
         concise_knowledge: str,
         action: str,
+        external_knowledge_refs: list[str] | None = None,
     ) -> None:
         super().__init__(
             hypothesis, reason, concise_reason, concise_observation, concise_justification, concise_knowledge
         )
         self.action = action
+        self.external_knowledge_refs = external_knowledge_refs or []
 
     def __str__(self) -> str:
         return f"""Chosen Action: {self.action}
@@ -167,6 +169,12 @@ class QlibQuantHypothesisGen(FactorAndModelHypothesisGen):
 
     def convert_response(self, response: str) -> Hypothesis:
         response_dict = json.loads(response)
+        raw_refs = response_dict.get("external_knowledge_refs", [])
+        external_knowledge_refs = [
+            str(ref).strip()
+            for ref in raw_refs
+            if str(ref).strip()
+        ] if isinstance(raw_refs, list) else []
         hypothesis = QlibQuantHypothesis(
             hypothesis=response_dict.get("hypothesis"),
             reason=response_dict.get("reason"),
@@ -175,5 +183,6 @@ class QlibQuantHypothesisGen(FactorAndModelHypothesisGen):
             concise_justification=response_dict.get("concise_justification"),
             concise_knowledge=response_dict.get("concise_knowledge"),
             action=response_dict.get("action"),
+            external_knowledge_refs=external_knowledge_refs,
         )
         return hypothesis

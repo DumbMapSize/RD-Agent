@@ -53,9 +53,11 @@ def _compose_rag_with_external_knowledge(base_rag: str | None, plan: ExperimentP
         return base_rag
 
     external_block = (
-        "External research knowledge is provided as candidate directions. "
-        "Use it to inform, not dictate, hypothesis generation; "
-        "prioritize observed experimental feedback over this context.\n\n"
+        "External research knowledge is provided as the current candidate under evaluation. "
+        "For the current action, if an item marked with KNOWLEDGE_ID is present, "
+        "design this hypothesis around that item and copy that exact ID into external_knowledge_refs. "
+        "Prioritize observed experimental feedback when deciding how to adapt the candidate, "
+        "but do not omit the ID when the candidate is used.\n\n"
         + "\n\n".join(selected)
     )
     if base_rag:
@@ -105,7 +107,7 @@ class LLMHypothesisGen(HypothesisGen):
         )
 
         resp = APIBackend().build_messages_and_create_chat_completion(
-            user_prompt, system_prompt, json_mode=json_flag, json_target_type=dict[str, str]
+            user_prompt, system_prompt, json_mode=json_flag, json_target_type=dict[str, object]
         )
 
         hypothesis = self.convert_response(resp)
