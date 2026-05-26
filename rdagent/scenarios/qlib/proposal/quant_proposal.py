@@ -169,12 +169,12 @@ class QlibQuantHypothesisGen(FactorAndModelHypothesisGen):
 
     def convert_response(self, response: str) -> Hypothesis:
         response_dict = json.loads(response)
-        raw_refs = response_dict.get("external_knowledge_refs", [])
-        external_knowledge_refs = [
-            str(ref).strip()
-            for ref in raw_refs
-            if str(ref).strip()
-        ] if isinstance(raw_refs, list) else []
+        raw_external_knowledge_ref = response_dict.get("external_knowledge_ref", "")
+        external_knowledge_ref = (
+            raw_external_knowledge_ref.strip()
+            if isinstance(raw_external_knowledge_ref, str)
+            else ""
+        )
         hypothesis = QlibQuantHypothesis(
             hypothesis=response_dict.get("hypothesis"),
             reason=response_dict.get("reason"),
@@ -183,6 +183,6 @@ class QlibQuantHypothesisGen(FactorAndModelHypothesisGen):
             concise_justification=response_dict.get("concise_justification"),
             concise_knowledge=response_dict.get("concise_knowledge"),
             action=response_dict.get("action"),
-            external_knowledge_refs=external_knowledge_refs,
+            external_knowledge_refs=[external_knowledge_ref] if external_knowledge_ref else [],
         )
         return hypothesis

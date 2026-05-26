@@ -27,6 +27,12 @@ from rdagent.log import rdagent_logger as logger
 from rdagent.scenarios.qlib.proposal.quant_proposal import QuantTrace
 
 
+def _clean_external_knowledge_value(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
 def _load_external_knowledge_file(knowledge_file: str) -> dict[str, str]:
     path = Path(knowledge_file)
     content = path.read_text(encoding="utf-8")
@@ -35,13 +41,15 @@ def _load_external_knowledge_file(knowledge_file: str) -> dict[str, str]:
     except json.JSONDecodeError:
         return {"general": content.strip(), "factor": "", "model": ""}
 
+    if raw is None:
+        return {"general": "", "factor": "", "model": ""}
     if isinstance(raw, str):
         return {"general": raw.strip(), "factor": "", "model": ""}
     if not isinstance(raw, dict):
         return {"general": json.dumps(raw, ensure_ascii=False, indent=2), "factor": "", "model": ""}
 
     return {
-        key: str(raw.get(key, "")).strip()
+        key: _clean_external_knowledge_value(raw.get(key, ""))
         for key in ("general", "factor", "model")
     }
 
@@ -164,10 +172,12 @@ def main(
     else:
         quant_loop = QuantRDLoop.load(path, checkout=checkout, replace_timer=replace_timer)
 
+    if not hasattr(quant_loop, "plan") or quant_loop.plan is None:
+        quant_loop.plan = {}
     if knowledge_file is not None:
-        if not hasattr(quant_loop, "plan") or quant_loop.plan is None:
-            quant_loop.plan = {}
         quant_loop.plan["external_knowledge"] = _load_external_knowledge_file(knowledge_file)
+    else:
+        quant_loop.plan.pop("external_knowledge", None)
 
     asyncio.run(quant_loop.run(step_n=step_n, loop_n=loop_n, all_duration=all_duration))
 

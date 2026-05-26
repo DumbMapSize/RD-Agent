@@ -55,7 +55,7 @@ def _compose_rag_with_external_knowledge(base_rag: str | None, plan: ExperimentP
     external_block = (
         "External research knowledge is provided as the current candidate under evaluation. "
         "For the current action, if an item marked with KNOWLEDGE_ID is present, "
-        "design this hypothesis around that item and copy that exact ID into external_knowledge_refs. "
+        "design this hypothesis around that item and copy that exact ID into external_knowledge_ref. "
         "Prioritize observed experimental feedback when deciding how to adapt the candidate, "
         "but do not omit the ID when the candidate is used.\n\n"
         + "\n\n".join(selected)
@@ -63,6 +63,10 @@ def _compose_rag_with_external_knowledge(base_rag: str | None, plan: ExperimentP
     if base_rag:
         return f"{base_rag}\n\n{external_block}"
     return external_block
+
+
+def _get_sota_hypothesis_and_feedback(context: dict) -> str:
+    return context.get("sota_hypothesis_and_feedback") or context.get("SOTA_hypothesis_and_feedback") or ""
 
 
 class LLMHypothesisGen(HypothesisGen):
@@ -100,14 +104,12 @@ class LLMHypothesisGen(HypothesisGen):
             last_hypothesis_and_feedback=(
                 context_dict["last_hypothesis_and_feedback"] if "last_hypothesis_and_feedback" in context_dict else ""
             ),
-            sota_hypothesis_and_feedback=(
-                context_dict["sota_hypothesis_and_feedback"] if "sota_hypothesis_and_feedback" in context_dict else ""
-            ),
+            sota_hypothesis_and_feedback=_get_sota_hypothesis_and_feedback(context_dict),
             RAG=context_dict["RAG"],
         )
 
         resp = APIBackend().build_messages_and_create_chat_completion(
-            user_prompt, system_prompt, json_mode=json_flag, json_target_type=dict[str, object]
+            user_prompt, system_prompt, json_mode=json_flag, json_target_type=dict[str, str]
         )
 
         hypothesis = self.convert_response(resp)
@@ -157,9 +159,7 @@ class LLMHypothesis2Experiment(Hypothesis2Experiment[Experiment]):
             last_hypothesis_and_feedback=(
                 context["last_hypothesis_and_feedback"] if "last_hypothesis_and_feedback" in context else ""
             ),
-            sota_hypothesis_and_feedback=(
-                context["sota_hypothesis_and_feedback"] if "sota_hypothesis_and_feedback" in context else ""
-            ),
+            sota_hypothesis_and_feedback=_get_sota_hypothesis_and_feedback(context),
             target_list=context["target_list"],
             RAG=context["RAG"],
         )
