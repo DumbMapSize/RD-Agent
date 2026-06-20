@@ -6,8 +6,8 @@ market: &market csi300
 benchmark: &benchmark SH000300
 
 data_handler_config: &data_handler_config
-    start_time: 2017-05-10
-    end_time: 2026-05-21
+    start_time: 2017-06-06
+    end_time: 2026-06-15
     instruments: *market
     data_loader:
         class: StaticSafeNestedDataLoader
@@ -29,8 +29,8 @@ data_handler_config: &data_handler_config
           kwargs:
               fields_group: feature
               clip_outlier: true
-              fit_start_time: 2017-05-10
-              fit_end_time: 2025-04-21
+              fit_start_time: 2017-06-06
+              fit_end_time: 2025-05-19
         - class: Fillna
           kwargs:
               fields_group: feature
@@ -49,8 +49,8 @@ port_analysis_config: &port_analysis_config
             topk: 20
             n_drop: 2
     backtest:
-        start_time: 2025-10-24
-        end_time: 2026-05-19
+        start_time: 2025-11-18
+        end_time: 2026-06-11
         account: 100000000
         benchmark: *benchmark
         exchange_kwargs:
@@ -73,7 +73,7 @@ task:
             weight_decay: {{ weight_decay }}
             metric: loss
             loss: mse
-            n_jobs: 12
+            n_jobs: 8
             GPU: 0
             pt_model_uri: "model.model_cls"
             pt_model_kwargs: {
@@ -88,9 +88,9 @@ task:
                 module_path: qlib.contrib.data.handler
                 kwargs: *data_handler_config
             segments:
-                train: [2017-05-10, 2025-04-21]
-                valid: [2025-04-22, 2025-10-23]
-                test: [2025-10-24, 2026-05-19]
+                train: [2017-06-06, 2025-05-19]
+                valid: [2025-05-20, 2025-11-17]
+                test: [2025-11-18, 2026-06-11]
             {% if step_len %}step_len: {{ step_len }}{% endif %}
     record: 
         - class: SignalRecord
