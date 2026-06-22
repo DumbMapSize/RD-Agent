@@ -41,7 +41,7 @@ def _normalise_external_knowledge(plan: ExperimentPlan | None) -> dict[str, str]
     }
 
 
-def _compose_rag_with_external_knowledge(base_rag: str | None, plan: ExperimentPlan | None, targets: str) -> str | None:
+def _select_external_knowledge(plan: ExperimentPlan | None, targets: str) -> list[str]:
     external = _normalise_external_knowledge(plan)
     action_key = _target_to_external_knowledge_key(targets)
     selected = []
@@ -49,6 +49,11 @@ def _compose_rag_with_external_knowledge(base_rag: str | None, plan: ExperimentP
         selected.append(external["general"])
     if action_key and external.get(action_key):
         selected.append(external[action_key])
+    return selected
+
+
+def _compose_rag_with_external_knowledge(base_rag: str | None, plan: ExperimentPlan | None, targets: str) -> str | None:
+    selected = _select_external_knowledge(plan, targets)
     if not selected:
         return base_rag
 
@@ -86,6 +91,11 @@ class LLMHypothesisGen(HypothesisGen):
         plan: ExperimentPlan | None = None,
     ) -> Hypothesis:
         context_dict, json_flag = self.prepare_context(trace)
+        if _select_external_knowledge(plan, self.targets):
+            context_dict["hypothesis_output_format"] = context_dict.get(
+                "hypothesis_output_format_with_external_knowledge",
+                context_dict["hypothesis_output_format"],
+            )
         context_dict["RAG"] = _compose_rag_with_external_knowledge(context_dict.get("RAG"), plan, self.targets)
 
         system_prompt = T(".prompts:hypothesis_gen.system_prompt").r(

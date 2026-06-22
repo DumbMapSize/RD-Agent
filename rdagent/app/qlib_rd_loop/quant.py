@@ -137,6 +137,7 @@ class QuantRDLoop(RDLoop):
                 reason="",
                 decision=False,
             )
+            feedback.exception = e
             logger.log_object(feedback, tag="feedback")
             self.trace.hist.append((prev_out["direct_exp_gen"]["exp_gen"], feedback))
         else:

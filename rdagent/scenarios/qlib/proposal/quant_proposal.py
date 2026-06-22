@@ -158,7 +158,12 @@ class QlibQuantHypothesisGen(FactorAndModelHypothesisGen):
             "last_hypothesis_and_feedback": last_hypothesis_and_feedback,
             "SOTA_hypothesis_and_feedback": sota_hypothesis_and_feedback,
             "RAG": qaunt_rag,
-            "hypothesis_output_format": T("scenarios.qlib.prompts:hypothesis_output_format_with_action").r(),
+            "hypothesis_output_format": T(
+                "scenarios.qlib.prompts:hypothesis_output_format_with_action"
+            ).r(include_external_knowledge_ref=False),
+            "hypothesis_output_format_with_external_knowledge": T(
+                "scenarios.qlib.prompts:hypothesis_output_format_with_action"
+            ).r(include_external_knowledge_ref=True),
             "hypothesis_specification": (
                 T("scenarios.qlib.prompts:factor_hypothesis_specification").r()
                 if action == "factor"
@@ -169,6 +174,9 @@ class QlibQuantHypothesisGen(FactorAndModelHypothesisGen):
 
     def convert_response(self, response: str) -> Hypothesis:
         response_dict = json.loads(response)
+        selected_action = (
+            self.targets if self.targets in {"factor", "model"} else response_dict.get("action")
+        )
         raw_external_knowledge_ref = response_dict.get("external_knowledge_ref", "")
         external_knowledge_ref = (
             raw_external_knowledge_ref.strip()
@@ -182,7 +190,7 @@ class QlibQuantHypothesisGen(FactorAndModelHypothesisGen):
             concise_observation=response_dict.get("concise_observation"),
             concise_justification=response_dict.get("concise_justification"),
             concise_knowledge=response_dict.get("concise_knowledge"),
-            action=response_dict.get("action"),
+            action=selected_action,
             external_knowledge_refs=[external_knowledge_ref] if external_knowledge_ref else [],
         )
         return hypothesis
