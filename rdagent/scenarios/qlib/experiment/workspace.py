@@ -9,6 +9,27 @@ from rdagent.core.experiment import FBWorkspace
 from rdagent.log import rdagent_logger as logger
 from rdagent.utils.env import QlibCondaConf, QlibCondaEnv, QTDockerEnv
 
+_TRAINING_METRIC_VALUE_PATTERN = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+_TRAINING_LOG_SUMMARY_RE = re.compile(
+    rf"^(?:Epoch\d+: train {_TRAINING_METRIC_VALUE_PATTERN}, valid {_TRAINING_METRIC_VALUE_PATTERN}"
+    rf"|best score: {_TRAINING_METRIC_VALUE_PATTERN} @ \d+ epoch)$"
+)
+_QLIB_GENERAL_PTNN_LOG_PREFIX_RE = re.compile(
+    r"^\[\d+:[^\]]+\]\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}\) "
+    r"INFO - qlib\.GeneralPTNN - \[pytorch_general_nn\.py:\d+\] - (?P<message>.*)$"
+)
+
+
+def _extract_training_log_summary(execute_qlib_log: str) -> str:
+    matches = []
+    for raw_line in execute_qlib_log.splitlines():
+        line = raw_line.strip()
+        qlib_match = _QLIB_GENERAL_PTNN_LOG_PREFIX_RE.fullmatch(line)
+        candidate = qlib_match.group("message").strip() if qlib_match else line
+        if _TRAINING_LOG_SUMMARY_RE.fullmatch(candidate):
+            matches.append(candidate)
+    return "\n".join(matches)
+
 
 class QlibFBWorkspace(FBWorkspace):
     def __init__(self, template_folder_path: Path, *args, **kwargs) -> None:
@@ -50,9 +71,7 @@ class QlibFBWorkspace(FBWorkspace):
         qlib_res_path = self.workspace_path / "qlib_res.csv"
         if qlib_res_path.exists():
             # Here, we ensure that the qlib experiment has run successfully before extracting information from execute_qlib_log using regex; otherwise, we keep the original experiment stdout.
-            pattern = r"(Epoch\d+: train -[0-9\.]+, valid -[0-9\.]+|best score: -[0-9\.]+ @ \d+ epoch)"
-            matches = re.findall(pattern, execute_qlib_log)
-            execute_qlib_log = "\n".join(matches)
+            execute_qlib_log = _extract_training_log_summary(execute_qlib_log)
             return pd.read_csv(qlib_res_path, index_col=0).iloc[:, 0], execute_qlib_log
         else:
             logger.error(f"File {qlib_res_path} does not exist.")
