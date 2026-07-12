@@ -4,10 +4,10 @@ qlib_init:
 market: &market csi300
 benchmark: &benchmark SH000300
 data_handler_config: &data_handler_config
-    start_time: 2017-06-20
-    end_time: 2026-06-30
-    fit_start_time: 2017-06-20
-    fit_end_time: 2025-06-03
+    start_time: 2017-06-23
+    end_time: 2026-07-03
+    fit_start_time: 2017-06-23
+    fit_end_time: 2025-06-06
     instruments: *market
     infer_processors:
         - class: RobustZScoreNorm
@@ -33,8 +33,8 @@ port_analysis_config: &port_analysis_config
             topk: 20
             n_drop: 2
     backtest:
-        start_time: 2025-12-02
-        end_time: 2026-06-26
+        start_time: 2025-12-05
+        end_time: 2026-07-01
         account: 100000000
         benchmark: *benchmark
         exchange_kwargs:
@@ -72,9 +72,9 @@ task:
                 module_path: qlib.contrib.data.handler
                 kwargs: *data_handler_config
             segments:
-                train: [2017-06-20, 2025-06-03]
-                valid: [2025-06-04, 2025-12-01]
-                test: [2025-12-02, 2026-06-26]
+                train: [2017-06-23, 2025-06-06]
+                valid: [2025-06-09, 2025-12-04]
+                test: [2025-12-05, 2026-07-01]
             {% if step_len %}step_len: {{ step_len }}{% endif %}
     record: 
         - class: SignalRecord
