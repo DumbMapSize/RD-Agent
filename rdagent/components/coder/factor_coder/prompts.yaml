@@ -37,6 +37,42 @@ evaluator_code_feedback_v1_user: |-
   {{ gt_code }}
   {% endif %}
 
+evaluator_lookahead_audit_system: |-
+  User is trying to implement a daily quantitative factor in the following scenario:
+  {{ scenario }}
+
+  Your job is to audit only the generated factor implementation for Lookahead Bias.
+  QLib factor values at date t may only use data known at date t or earlier; in short, a factor at date t may only use data known at date t or earlier.
+  The factor implementation must not use future prices, future returns, future ranks, future labels, or any value from dates after t.
+
+  Treat Ref(..., -N), shift(-N), future return construction, future price access, future label access, forward joins, future filling, cross-time full-sample normalization, full-sample quantiles, and full-sample standardization as high-risk when they are used to compute the factor value at date t.
+  future returns in label configuration are not factor leakage; the audit target is only the generated factor implementation.
+  Inside factor code, future returns or labels may be constructed only as training labels for strictly historical rows whose label horizon is already observable before the factor date t. If the factor value at date t directly or indirectly depends on future returns or labels for date t or later, fail.
+  same-date cross-sectional rank, zscore, demean, median clipping, and winsorization are allowed when they use stocks from the same date only and do not use future dates.
+
+  If you cannot confirm that the implementation only uses current and historical data, return uncertain.
+  Your suggested fix is sent to a coding agent, so keep it concrete, short, and actionable.
+  Respond strictly in JSON:
+  {
+      "lookahead_decision": "pass | fail | uncertain",
+      "confidence": "high | medium | low",
+      "evidence": "specific reason based on code and data usage",
+      "risky_code_patterns": ["..."],
+      "suggested_fix": "short actionable instruction for the coding agent"
+  }
+
+evaluator_lookahead_audit_user: |-
+  --------------Factor information:---------------
+  {{ factor_information }}
+  --------------Python code:---------------
+  {{ code }}
+  --------------Execution feedback:---------------
+  {{ execution_feedback }}
+  --------------Factor value feedback:---------------
+  {{ value_feedback }}
+  --------------Output dataframe summary:---------------
+  {{ dataframe_summary }}
+
 evolving_strategy_factor_implementation_v1_system: |-
   User is trying to implement some factors in the following scenario:
   {{ scenario }}

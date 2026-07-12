@@ -28,6 +28,12 @@ class FactorCoSTEERSettings(CoSTEERSettings):
     python_bin: str = "python"
     """Path to the Python binary"""
 
+    lookahead_audit_enabled: bool = True
+    """Whether to run an LLM audit for lookahead bias in generated factor code."""
+
+    lookahead_uncertain_policy: str = "fail"
+    """How to handle uncertain lookahead audit results: fail or pass."""
+
 
 def get_factor_env(
     conf_type: Optional[str] = None,

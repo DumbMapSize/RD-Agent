@@ -8,13 +8,23 @@ from rdagent.components.coder.CoSTEER.evaluators import (
 from rdagent.components.coder.factor_coder.eva_utils import (
     FactorCodeEvaluator,
     FactorFinalDecisionEvaluator,
+    FactorLookaheadEvaluator,
     FactorValueEvaluator,
 )
+from rdagent.components.coder.factor_coder.config import FACTOR_COSTEER_SETTINGS
 from rdagent.components.coder.factor_coder.factor import FactorTask
 from rdagent.core.evolving_framework import QueriedKnowledge
 from rdagent.core.experiment import Workspace
 
 FactorSingleFeedback = CoSTEERSingleFeedbackDeprecated
+
+
+def _append_feedback(existing: str | None, addition: str | None) -> str | None:
+    if not addition:
+        return existing
+    if not existing:
+        return addition
+    return f"{existing}\n\n{addition}"
 
 
 class FactorEvaluatorForCoder(CoSTEEREvaluator):
@@ -27,6 +37,7 @@ class FactorEvaluatorForCoder(CoSTEEREvaluator):
         self.value_evaluator = FactorValueEvaluator(self.scen)
         self.code_evaluator = FactorCodeEvaluator(self.scen)
         self.final_decision_evaluator = FactorFinalDecisionEvaluator(self.scen)
+        self.lookahead_evaluator = FactorLookaheadEvaluator(self.scen)
 
     def evaluate(
         self,
@@ -117,6 +128,30 @@ class FactorEvaluatorForCoder(CoSTEEREvaluator):
                     value_feedback=factor_feedback.value_feedback,
                     code_feedback=factor_feedback.code_feedback,
                 )
+            if FACTOR_COSTEER_SETTINGS.lookahead_audit_enabled and factor_feedback.final_decision is True:
+                if not hasattr(self, "lookahead_evaluator"):
+                    self.lookahead_evaluator = FactorLookaheadEvaluator(self.scen)
+                lookahead_result = self.lookahead_evaluator.evaluate(
+                    target_task=target_task,
+                    code=implementation.all_codes,
+                    execution_feedback=factor_feedback.execution_feedback,
+                    value_feedback=factor_feedback.value_feedback,
+                    gen_df=gen_df,
+                )
+                if not lookahead_result.final_decision:
+                    factor_feedback.final_decision = False
+                    factor_feedback.code_feedback = _append_feedback(
+                        factor_feedback.code_feedback,
+                        lookahead_result.to_code_feedback(),
+                    )
+                    factor_feedback.value_feedback = _append_feedback(
+                        factor_feedback.value_feedback,
+                        lookahead_result.to_value_feedback(),
+                    )
+                    factor_feedback.final_feedback = _append_feedback(
+                        factor_feedback.final_feedback,
+                        "Lookahead audit failed; implementation must be revised.",
+                    )
             return factor_feedback
 
 

@@ -1,6 +1,7 @@
 import io
 import json
 from abc import abstractmethod
+from dataclasses import dataclass
 from typing import Dict, Tuple
 
 import pandas as pd
@@ -62,6 +63,132 @@ class FactorEvaluator:
 
     def __str__(self) -> str:
         return self.__class__.__name__
+
+
+@dataclass
+class FactorLookaheadAuditResult:
+    decision: str
+    confidence: str
+    evidence: str
+    risky_code_patterns: list[str]
+    suggested_fix: str
+    raw_response: str = ""
+
+    @property
+    def final_decision(self) -> bool:
+        if self.decision == "pass":
+            return True
+        if self.decision == "uncertain" and FACTOR_COSTEER_SETTINGS.lookahead_uncertain_policy == "pass":
+            return True
+        return False
+
+    def to_code_feedback(self) -> str:
+        patterns = ", ".join(self.risky_code_patterns) if self.risky_code_patterns else "none reported"
+        return (
+            f"Lookahead audit failed or uncertain. Decision: {self.decision}; confidence: {self.confidence}. "
+            f"Evidence: {self.evidence} Risky patterns: {patterns}. Suggested fix: {self.suggested_fix}"
+        )
+
+    def to_value_feedback(self) -> str:
+        return f"Lookahead audit: decision={self.decision}; evidence={self.evidence}"
+
+
+class FactorLookaheadEvaluator(FactorEvaluator):
+    def evaluate(
+        self,
+        target_task: FactorTask,
+        code: str,
+        execution_feedback: str,
+        value_feedback: str,
+        gen_df: pd.DataFrame | pd.Series | None,
+        **kwargs,
+    ) -> FactorLookaheadAuditResult:
+        system_prompt = T(".prompts:evaluator_lookahead_audit_system").r(
+            scenario=(
+                self.scen.get_scenario_all_desc(
+                    target_task,
+                    filtered_tag="feature",
+                    simple_background=FACTOR_COSTEER_SETTINGS.simple_background,
+                )
+                if self.scen is not None
+                else "No scenario description."
+            )
+        )
+        user_prompt = T(".prompts:evaluator_lookahead_audit_user").r(
+            factor_information=target_task.get_task_information(),
+            code=code,
+            execution_feedback=execution_feedback,
+            value_feedback=value_feedback,
+            dataframe_summary=self._summarize_dataframe(gen_df),
+        )
+
+        try:
+            response = APIBackend().build_messages_and_create_chat_completion(
+                user_prompt=user_prompt,
+                system_prompt=system_prompt,
+                json_mode=True,
+                json_target_type=Dict[str, str | list[str]],
+            )
+            return self._parse_response(response)
+        except Exception as e:
+            return FactorLookaheadAuditResult(
+                decision="uncertain",
+                confidence="low",
+                evidence=f"Failed to parse lookahead audit response: {e}",
+                risky_code_patterns=[],
+                suggested_fix="Review factor code to ensure it uses only current and historical data.",
+            )
+
+    @staticmethod
+    def _parse_response(response: str) -> FactorLookaheadAuditResult:
+        try:
+            payload = json.loads(response)
+            decision = str(payload["lookahead_decision"]).lower().strip()
+            if decision not in {"pass", "fail", "uncertain"}:
+                raise ValueError(f"Invalid lookahead_decision: {decision}")
+            patterns = payload.get("risky_code_patterns", [])
+            if isinstance(patterns, str):
+                patterns = [patterns]
+            return FactorLookaheadAuditResult(
+                decision=decision,
+                confidence=str(payload.get("confidence", "low")).lower().strip(),
+                evidence=str(payload["evidence"]),
+                risky_code_patterns=[str(pattern) for pattern in patterns],
+                suggested_fix=str(payload.get("suggested_fix", "")),
+                raw_response=response,
+            )
+        except Exception as e:
+            return FactorLookaheadAuditResult(
+                decision="uncertain",
+                confidence="low",
+                evidence=f"Failed to parse lookahead audit response: {e}",
+                risky_code_patterns=[],
+                suggested_fix="Review factor code to ensure it uses only current and historical data.",
+                raw_response=response,
+            )
+
+    @staticmethod
+    def _summarize_dataframe(gen_df: pd.DataFrame | pd.Series | None) -> str:
+        if gen_df is None:
+            return "No factor dataframe was generated."
+        if isinstance(gen_df, pd.Series):
+            gen_df = gen_df.to_frame("source_factor")
+
+        dtype_lines = [f"- {col}: {dtype}" for col, dtype in gen_df.dtypes.items()]
+        return "\n".join(
+            [
+                "DataFrame info:",
+                f"Rows: {len(gen_df)}",
+                f"Columns: {len(gen_df.columns)}",
+                f"Index type: {type(gen_df.index).__name__}",
+                f"Index names: {list(gen_df.index.names)}",
+                f"Columns: {[str(col) for col in gen_df.columns]}",
+                "Column dtypes:",
+                "\n".join(dtype_lines),
+                "Head (first 5 rows only):",
+                gen_df.head(5).to_string(),
+            ]
+        )
 
 
 class FactorCodeEvaluator(FactorEvaluator):
