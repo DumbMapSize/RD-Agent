@@ -31,3 +31,13 @@ def test_qlib_template_keeps_research_pool_without_restricting_exchange(relative
 
     assert "instruments: *market" in text
     assert not any(line.startswith("codes:") for line in _exchange_kwargs(text))
+
+
+@pytest.mark.parametrize("relative_path", TEMPLATES)
+def test_qlib_templates_use_consistent_feature_and_label_processors(relative_path: str) -> None:
+    text = (ROOT / relative_path).read_text()
+
+    assert "class: RobustZScoreNorm" in text
+    assert "class: Fillna" in text
+    assert "class: CSZScoreNorm" in text
+    assert "class: CSRankNorm" not in text

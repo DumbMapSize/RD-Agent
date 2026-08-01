@@ -24,6 +24,16 @@ data_handler_config: &data_handler_config
                   kwargs:
                     config: "combined_factors_df.parquet"
 
+    infer_processors:
+        - class: RobustZScoreNorm
+          kwargs:
+              fields_group: feature
+              clip_outlier: true
+              fit_start_time: 2017-07-04
+              fit_end_time: 2025-06-17
+        - class: Fillna
+          kwargs:
+              fields_group: feature
     learn_processors:
         - class: DropnaLabel
         - class: CSZScoreNorm

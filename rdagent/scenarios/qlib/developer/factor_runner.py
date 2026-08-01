@@ -4,7 +4,6 @@ import pandas as pd
 from pandarallel import pandarallel
 
 from rdagent.core.conf import RD_AGENT_SETTINGS
-from rdagent.core.utils import cache_with_pickle
 
 pandarallel.initialize(verbose=1)
 
@@ -70,7 +69,6 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
         IC_max = IC_max.unstack().max(axis=0)
         return new_feature.iloc[:, IC_max[IC_max < 0.99].index]
 
-    @cache_with_pickle(CachedRunner.get_cache_key, CachedRunner.assign_cached_result)
     def develop(self, exp: QlibFactorExperiment) -> QlibFactorExperiment:
         """
         Generate the experiment by processing and combining factor data,
@@ -104,7 +102,7 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
                     raise FactorEmptyError(
                         "The factors generated in this round are highly similar to the previous factors. Please change the direction for creating new factors."
                     )
-                combined_factors = pd.concat([SOTA_factor, new_factors], axis=1).dropna()
+                combined_factors = pd.concat([SOTA_factor, new_factors], axis=1)
             else:
                 combined_factors = new_factors
 

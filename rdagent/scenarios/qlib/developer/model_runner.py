@@ -3,7 +3,6 @@ import pandas as pd
 from rdagent.components.runner import CachedRunner
 from rdagent.core.conf import RD_AGENT_SETTINGS
 from rdagent.core.exception import ModelEmptyError
-from rdagent.core.utils import cache_with_pickle
 from rdagent.log import rdagent_logger as logger
 from rdagent.scenarios.qlib.developer.utils import process_factor_data
 from rdagent.scenarios.qlib.experiment.factor_experiment import QlibFactorExperiment
@@ -23,7 +22,6 @@ class QlibModelRunner(CachedRunner[QlibModelExperiment]):
     - let LLM modify model.py
     """
 
-    @cache_with_pickle(CachedRunner.get_cache_key, CachedRunner.assign_cached_result)
     def develop(self, exp: QlibModelExperiment) -> QlibModelExperiment:
         if exp.based_experiments and exp.based_experiments[-1].result is None:
             exp.based_experiments[-1] = self.develop(exp.based_experiments[-1])
