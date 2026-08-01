@@ -69,6 +69,32 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
         IC_max = IC_max.unstack().max(axis=0)
         return new_feature.iloc[:, IC_max[IC_max < 0.99].index]
 
+    @staticmethod
+    def _remove_deduplicated_factor_state(
+        exp: QlibFactorExperiment, deduplicated_factor_names: set[str]
+    ) -> None:
+        if not deduplicated_factor_names:
+            return
+
+        removed_indices = {
+            index
+            for index, task in enumerate(exp.sub_tasks)
+            if task.factor_name in deduplicated_factor_names
+        }
+        if not removed_indices:
+            return
+        retained_indices = [
+            index
+            for index in range(len(exp.sub_tasks))
+            if index not in removed_indices
+        ]
+        exp.sub_tasks = [exp.sub_tasks[index] for index in retained_indices]
+        exp.sub_workspace_list = [exp.sub_workspace_list[index] for index in retained_indices]
+        exp.prop_dev_feedback.feedback_list = [
+            exp.prop_dev_feedback.feedback_list[index] for index in retained_indices
+        ]
+        logger.info(f"Removed correlated factors from experiment state: {sorted(deduplicated_factor_names)}")
+
     def develop(self, exp: QlibFactorExperiment) -> QlibFactorExperiment:
         """
         Generate the experiment by processing and combining factor data,
@@ -97,11 +123,16 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
 
             # Combine the SOTA factor and new factors if SOTA factor exists
             if SOTA_factor is not None and not SOTA_factor.empty:
+                original_new_factor_names = set(new_factors.columns)
                 new_factors = self.deduplicate_new_factors(SOTA_factor, new_factors)
                 if new_factors.empty:
                     raise FactorEmptyError(
                         "The factors generated in this round are highly similar to the previous factors. Please change the direction for creating new factors."
                     )
+                self._remove_deduplicated_factor_state(
+                    exp,
+                    original_new_factor_names - set(new_factors.columns),
+                )
                 combined_factors = pd.concat([SOTA_factor, new_factors], axis=1)
             else:
                 combined_factors = new_factors
