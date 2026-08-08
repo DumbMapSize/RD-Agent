@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import shlex
+import signal
 import subprocess
 import uuid
 from pathlib import Path
@@ -15,6 +18,60 @@ from rdagent.core.exception import CodeFormatError, CustomRuntimeError, NoOutput
 from rdagent.core.experiment import Experiment, FBWorkspace
 from rdagent.core.utils import cache_with_pickle
 from rdagent.oai.llm_utils import md5_hash
+
+
+_PROCESS_TERMINATION_GRACE_SECONDS = 5
+
+
+def _terminate_process_tree(process: subprocess.Popen) -> None:
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=_PROCESS_TERMINATION_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+
+        # The group can outlive its leader if a descendant ignores SIGTERM or
+        # closes the inherited output pipe. Ensure no such process survives.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()
+        return
+
+    if process.poll() is None:
+        process.terminate()
+    try:
+        process.communicate(timeout=_PROCESS_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
+
+
+def _run_factor_process(execution_code_path: Path, cwd: Path) -> None:
+    command = [
+        *shlex.split(FACTOR_COSTEER_SETTINGS.python_bin, posix=os.name != "nt"),
+        str(execution_code_path),
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=os.name == "posix",
+    )
+    try:
+        output, _ = process.communicate(timeout=FACTOR_COSTEER_SETTINGS.file_based_execution_timeout)
+    except subprocess.TimeoutExpired:
+        _terminate_process_tree(process)
+        raise
+
+    if process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, command, output=output)
 
 
 class FactorTask(CoSTEERTask):
@@ -148,6 +205,8 @@ class FactorFBWorkspace(FBWorkspace):
             code_path = self.workspace_path / f"factor.py"
 
             self.link_all_files_in_folder_to_workspace(source_data_path, self.workspace_path)
+            workspace_output_file_path = self.workspace_path / "result.h5"
+            workspace_output_file_path.unlink(missing_ok=True)
 
             execution_feedback = self.FB_EXECUTION_SUCCEEDED
             execution_success = False
@@ -160,13 +219,7 @@ class FactorFBWorkspace(FBWorkspace):
                 execution_code_path.write_text((Path(__file__).parent / "factor_execution_template.txt").read_text())
 
             try:
-                subprocess.check_output(
-                    f"{FACTOR_COSTEER_SETTINGS.python_bin} {execution_code_path}",
-                    shell=True,
-                    cwd=self.workspace_path,
-                    stderr=subprocess.STDOUT,
-                    timeout=FACTOR_COSTEER_SETTINGS.file_based_execution_timeout,
-                )
+                _run_factor_process(execution_code_path, self.workspace_path)
                 execution_success = True
             except subprocess.CalledProcessError as e:
                 import site
@@ -191,7 +244,6 @@ class FactorFBWorkspace(FBWorkspace):
                 else:
                     execution_error = CustomRuntimeError(execution_feedback)
 
-            workspace_output_file_path = self.workspace_path / "result.h5"
             if workspace_output_file_path.exists() and execution_success:
                 try:
                     executed_factor_value_dataframe = pd.read_hdf(workspace_output_file_path)

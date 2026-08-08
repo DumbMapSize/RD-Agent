@@ -11,6 +11,18 @@ from rdagent.oai.llm_utils import APIBackend
 from rdagent.utils.agent.tpl import T
 
 
+def _parse_final_decision(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+    raise ValueError(f"Invalid final_decision value: {value!r}")
+
+
 # This shape evaluator is also used in data_science
 def shape_evaluator(prediction: np.ndarray, target_shape: Tuple = None) -> Tuple[str, bool]:
     if target_shape is None or prediction is None:
@@ -156,11 +168,7 @@ class ModelFinalEvaluator(CoSTEEREvaluator):
                 json_target_type=Dict[str, str | bool | int],
             ),
         )
-        if isinstance(final_evaluation_dict["final_decision"], str) and final_evaluation_dict[
-            "final_decision"
-        ].lower() in ("true", "false"):
-            final_evaluation_dict["final_decision"] = bool(final_evaluation_dict["final_decision"])
         return (
             final_evaluation_dict["final_feedback"],
-            final_evaluation_dict["final_decision"],
+            _parse_final_decision(final_evaluation_dict["final_decision"]),
         )

@@ -228,6 +228,7 @@ factor_feedback_generation:
       1. Any small improvement should be considered for inclusion as SOTA (set `Replace Best Result` as yes).
       2. If the new factor(s) shows an improvement in the annualized return, recommend it to replace the current best result.
       3. Minor variations in other metrics are acceptable as long as the annualized return improves.
+      4. Treat the supplied metrics as evidence and distinguish observed changes from possible explanations. Do not claim that turnover, coverage, exposure, correlation, or an individual factor caused a result unless the supplied evidence establishes it. Results for multiple implemented factors describe the combined experiment, not each factor separately.
 
     Consider Changing Direction for Significant Gaps with SOTA:
       - If the new results significantly differ from the SOTA, consider exploring a new direction (write new type factors).
@@ -255,7 +256,7 @@ factor_feedback_generation:
         **Note: This factor was not implemented in the current experiment. Only the hypothesis for implemented factors can be verified.**
         {% endif %}
     {% endfor %}
-    Combined Results: 
+    Current vs SOTA comparison evidence:
     {{ combined_result }}
     
     Analyze the combined result in the context of its ability to:
@@ -273,6 +274,7 @@ model_feedback_generation:
 
     You will receive a quantitative model hypothesis, its specific task description, and it market backtest result. 
     Your feedback should specify whether the current result supports or refutes the hypothesis, compare it with previous SOTA results, examine the model's training logs to analyze whether there are issues with hyperparameter settings, and suggest improvements or new directions.
+    Treat the supplied metrics and training log as evidence and distinguish observed changes from possible explanations. Do not claim that turnover, coverage, exposure, or correlation caused a result unless the supplied evidence establishes it.
 
     Please provide detailed and constructive feedback.
     Example JSON Structure for Result Analysis:
@@ -291,7 +293,6 @@ model_feedback_generation:
     Hypothesis: {{ sota_hypothesis.hypothesis }}
     Specific Task: {{ sota_task }}
     Code Implementation: {{ sota_code }}
-    Result: {{ sota_result }}
     {% else %}
     # This is the first round. No previous information available. As long as the performance is not too negative (eg.ICIR is greater than 0), treat it as successful. Do not set the threshold too high.  
     {% endif %} 
@@ -302,7 +303,9 @@ model_feedback_generation:
     Specific Task: {{ exp.sub_tasks[0].get_task_information() }}
     Code Implementation: {{ exp.sub_workspace_list[0].file_dict.get("model.py") }}
     Training Log: {{ exp.stdout }}
-    Result: {{ exp_result }}
+
+    # Current vs SOTA comparison evidence:
+    {{ combined_result }}
 
     # When judging the results:
     1. **Recommendation for Replacement:**

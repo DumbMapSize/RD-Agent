@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict
 
 import pandas as pd
 
@@ -20,35 +20,98 @@ IMPORTANT_METRICS = [
     "1day.excess_return_with_cost.max_drawdown",
 ]
 
+PREDICTIVE_METRICS = (
+    "IC",
+    "ICIR",
+    "Rank IC",
+    "Rank ICIR",
+)
+PORTFOLIO_METRICS = (
+    "1day.excess_return_without_cost.annualized_return",
+    "1day.excess_return_without_cost.information_ratio",
+    "1day.excess_return_without_cost.max_drawdown",
+    "1day.excess_return_with_cost.annualized_return",
+    "1day.excess_return_with_cost.information_ratio",
+    "1day.excess_return_with_cost.max_drawdown",
+)
+GROSS_ANNUALIZED_RETURN = "1day.excess_return_without_cost.annualized_return"
+NET_ANNUALIZED_RETURN = "1day.excess_return_with_cost.annualized_return"
 
-def process_results(current_result, sota_result):
-    # Convert the results to dataframes
-    current_df = pd.DataFrame(current_result)
-    sota_df = pd.DataFrame(sota_result)
 
-    # Set the metric as the index
-    current_df.index.name = "metric"
-    sota_df.index.name = "metric"
+def _as_metric_series(result: Any) -> pd.Series:
+    if result is None:
+        return pd.Series(dtype=float)
+    if isinstance(result, pd.Series):
+        return result
+    if isinstance(result, pd.DataFrame):
+        if result.shape[1] == 1:
+            return result.iloc[:, 0]
+        if result.shape[0] == 1:
+            return result.iloc[0]
+        return pd.Series(dtype=float)
+    try:
+        return pd.Series(result)
+    except (TypeError, ValueError):
+        return pd.Series(dtype=float)
 
-    # Rename the value column to reflect the result type
-    current_df.rename(columns={"0": "Current Result"}, inplace=True)
-    sota_df.rename(columns={"0": "SOTA Result"}, inplace=True)
 
-    # Combine the dataframes on the Metric index
-    combined_df = pd.concat([current_df, sota_df], axis=1)
+def _metric_value(result: pd.Series, metric: str) -> float | None:
+    if metric not in result.index:
+        return None
+    try:
+        value = float(result.loc[metric])
+    except (TypeError, ValueError):
+        return None
+    return value if pd.notna(value) else None
 
-    # Filter the combined DataFrame to retain only the important metrics
-    filtered_combined_df = combined_df.loc[IMPORTANT_METRICS]
 
-    def format_filtered_combined_df(filtered_combined_df: pd.DataFrame) -> str:
-        results = []
-        for metric, row in filtered_combined_df.iterrows():
-            current = row["Current Result"]
-            sota = row["SOTA Result"]
-            results.append(f"{metric} of Current Result is {current:.6f}, of SOTA Result is {sota:.6f}")
-        return "; ".join(results)
+def _format_value(value: float | None, *, signed: bool = False) -> str:
+    if value is None:
+        return "unavailable"
+    if abs(value) < 0.5e-6:
+        value = 0.0
+    return f"{value:+.6f}" if signed else f"{value:.6f}"
 
-    return format_filtered_combined_df(filtered_combined_df)
+
+def _format_metric(metric: str, current: pd.Series, sota: pd.Series) -> str | None:
+    current_value = _metric_value(current, metric)
+    sota_value = _metric_value(sota, metric)
+    if current_value is None and sota_value is None:
+        return None
+    delta = current_value - sota_value if current_value is not None and sota_value is not None else None
+    return (
+        f"{metric}: Current={_format_value(current_value)}, "
+        f"SOTA={_format_value(sota_value)}, Delta={_format_value(delta, signed=True)}"
+    )
+
+
+def process_results(current_result: Any, sota_result: Any) -> str:
+    current = _as_metric_series(current_result)
+    sota = _as_metric_series(sota_result)
+    sections = []
+    for title, metrics in (
+        ("Predictive metrics", PREDICTIVE_METRICS),
+        ("Portfolio metrics", PORTFOLIO_METRICS),
+    ):
+        lines = [line for metric in metrics if (line := _format_metric(metric, current, sota)) is not None]
+        if lines:
+            sections.append(f"{title} (Delta = Current - SOTA):\n" + "\n".join(f"- {line}" for line in lines))
+
+    current_gross = _metric_value(current, GROSS_ANNUALIZED_RETURN)
+    current_net = _metric_value(current, NET_ANNUALIZED_RETURN)
+    sota_gross = _metric_value(sota, GROSS_ANNUALIZED_RETURN)
+    sota_net = _metric_value(sota, NET_ANNUALIZED_RETURN)
+    current_drag = current_gross - current_net if current_gross is not None and current_net is not None else None
+    sota_drag = sota_gross - sota_net if sota_gross is not None and sota_net is not None else None
+    if current_drag is not None or sota_drag is not None:
+        drag_delta = current_drag - sota_drag if current_drag is not None and sota_drag is not None else None
+        sections.append(
+            "Derived metric (gross annualized return - net annualized return; does not identify its cause):\n"
+            f"- Annualized return cost drag: Current={_format_value(current_drag)}, "
+            f"SOTA={_format_value(sota_drag)}, Delta={_format_value(drag_delta, signed=True)}"
+        )
+
+    return "\n".join(sections) if sections else "No comparable backtest metrics are available."
 
 
 class QlibFactorExperiment2Feedback(Experiment2Feedback):
@@ -146,14 +209,17 @@ class QlibModelExperiment2Feedback(Experiment2Feedback):
 
         # Generate the user prompt
         SOTA_hypothesis, SOTA_experiment = trace.get_sota_hypothesis_and_experiment()
+        combined_result = process_results(
+            exp.result,
+            SOTA_experiment.result if SOTA_hypothesis else None,
+        ) if exp.result is not None else "execution failed"
         user_prompt = T("scenarios.qlib.prompts:model_feedback_generation.user").r(
             sota_hypothesis=SOTA_hypothesis,
             sota_task=SOTA_experiment.sub_tasks[0].get_task_information() if SOTA_hypothesis else None,
             sota_code=SOTA_experiment.sub_workspace_list[0].file_dict.get("model.py") if SOTA_hypothesis else None,
-            sota_result=SOTA_experiment.result.loc[IMPORTANT_METRICS] if SOTA_hypothesis else None,
             hypothesis=hypothesis,
             exp=exp,
-            exp_result=exp.result.loc[IMPORTANT_METRICS] if exp.result is not None else "execution failed",
+            combined_result=combined_result,
         )
 
         # Call the APIBackend to generate the response for hypothesis feedback
