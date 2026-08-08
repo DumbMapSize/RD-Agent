@@ -98,9 +98,11 @@ class QlibModelHypothesis2Experiment(ModelHypothesis2Experiment):
                     specific_trace.hist.insert(0, trace.hist[i])
             if len(specific_trace.hist) > 0:
                 specific_trace.hist.reverse()
-                hypothesis_and_feedback = T("scenarios.qlib.prompts:hypothesis_and_feedback").r(
-                    trace=specific_trace,
-                )
+                hypothesis_and_feedback = T(
+                    "scenarios.qlib.prompts:quant_hypothesis_and_feedback"
+                    if isinstance(trace.scen, QlibQuantScenario)
+                    else "scenarios.qlib.prompts:hypothesis_and_feedback"
+                ).r(trace=specific_trace)
             else:
                 hypothesis_and_feedback = "No previous hypothesis and feedback available."
 

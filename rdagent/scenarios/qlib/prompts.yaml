@@ -20,6 +20,44 @@ hypothesis_and_feedback: |-
   =========================================================
   {% endfor %}
 
+quant_hypothesis_and_feedback: |-
+  =========================================================
+  {% for experiment, feedback in trace.hist %}
+  # Trial {{ loop.index }}:
+  ## Hypothesis
+  {% if experiment.hypothesis.action == "model" and experiment.sub_tasks|length > 0 and experiment.hypothesis.reason %}
+  Chosen Action: model
+  Reason: {{ experiment.hypothesis.reason }}
+  {% else %}
+  {{ experiment.hypothesis }}
+  {% endif %}
+  ## Executed task:
+  {% for task in experiment.sub_tasks %}
+  {% if task is not none and task.get_task_brief_information is defined %}
+  {% if task.factor_name is defined %}
+  factor_name: {{ task.factor_name }}
+  factor_description: {{ task.factor_description }}
+  factor_formulation: {{ task.factor_formulation }}
+  {% if task.variables is mapping %}
+  variables: {{ task.variables.keys() | list }}
+  {% else %}
+  variables: {{ task.variables }}
+  {% endif %}
+  {% else %}
+  {{ task.get_task_brief_information() }}
+  {% endif %}
+  {% endif %}
+  {% endfor %}
+  ## Backtest Analysis and Feedback:
+  {% if experiment.result is not none %}
+  Backtest Result: {{ experiment.result.loc[["IC", "1day.excess_return_without_cost.annualized_return", "1day.excess_return_without_cost.max_drawdown"]] }}
+  {% endif %}
+  Observation: {{ feedback.observations }}
+  Hypothesis Evaluation: {{ feedback.hypothesis_evaluation }}
+  Decision (Whether the hypothesis was successful): {{ feedback.decision }}
+  =========================================================
+  {% endfor %}
+
 last_hypothesis_and_feedback: |-
   ## Hypothesis
   {{ experiment.hypothesis }}
