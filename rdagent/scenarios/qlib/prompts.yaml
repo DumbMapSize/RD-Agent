@@ -127,10 +127,12 @@ model_hypothesis_specification: |-
   2. Second, `last_hypothesis_and_feedback` and `sota_hypothesis_and_feedback` are key references you should pay close attention to. You can choose to optimize based on either of them or generate new ideas to form hypotheses and experiments.
   3. If there is no prior experiment or result available at the beginning, you can start by implementing a simple and small architecture.
   4. If a series of attempts fail to achieve SOTA, consider exploring entirely new directions; at this point, it is acceptable to return to simple architectures.
-  5. Focus exclusively on the architecture of PyTorch models. Each hypothesis should specifically address architectural decisions, such as layer configurations, activation functions, regularization methods, and overall model structure. DO NOT do any feature-specific processing. Instead, you can propose innovative transformations on the input time-series data to enhance model training effectiveness.
-  6. Avoid including aspects unrelated to architecture, such as input features or optimization strategies.
+  5. Focus primarily on the architecture of PyTorch models. Each hypothesis should specifically address architectural decisions, such as layer configurations, activation functions, regularization methods, and overall model structure. DO NOT do any feature-specific processing. Instead, you can propose innovative transformations on the input time-series data to enhance model training effectiveness.
+  6. Avoid including input features or training-loop changes outside the supported `training_hyperparameters` interface.
   7. Sometimes, when training performance is poor, adjusting hyperparameters can also be an effective strategy for improvement.
-  8. Use standard libraries for baseline models, but also explore custom architecture designs to investigate novel structures. After sufficient trials with traditional models, aim for innovation comparable to top-tier AI conferences (NeurIPS, ICLR, ICML, SIGKDD, etc.) in time series modeling.
+  8. The supported training interface contains `n_epochs`, `lr`, `early_stop`, `batch_size`, `weight_decay`, `optimizer`, `loss`, `gradient_clip`, and `scheduler`. A TimeSeries model can additionally control `time_series_lookback`.
+  9. `optimizer.name` supports Adam, AdamW, or SGD; only SGD can use `optimizer.momentum`. `loss.name` supports MSE, MAE, or Huber. `gradient_clip.mode` supports value, norm, or none. `scheduler.name` supports plateau or none. Do not propose or claim any other training-loop behavior.
+  10. Use standard libraries for baseline models, but also explore custom architecture designs to investigate novel structures. After sufficient trials with traditional models, aim for innovation comparable to top-tier AI conferences (NeurIPS, ICLR, ICML, SIGKDD, etc.) in time series modeling.
 
 factor_hypothesis_specification: |-
   1. **1-5 Factors per Generation:**
@@ -176,6 +178,7 @@ factor_experiment_output_format: |-
 model_experiment_output_format: |-
   So far please only design one model to test the hypothesis! 
   The output should follow JSON format. The schema is as follows (value in training_hyperparameters is a basic setting for reference, you CAN CHANGE depends on the previous training log): 
+  The `training_hyperparameters` object must use the schema shown below; do not add any other fields. For a TimeSeries model, add `"time_series_lookback": 20` (or another positive integer); omit that field for a Tabular model.
   {
     "model_name (The name of the model)": {
         "description": "A detailed description of the model",
@@ -197,7 +200,11 @@ model_experiment_output_format: |-
             "early_stop": 10,
             "batch_size": 256,
             "weight_decay": 1e-4,
-        }
+            "optimizer": {"name": "adam", "momentum": 0.0},
+            "loss": {"name": "mse", "huber_delta": 1.0},
+            "gradient_clip": {"mode": "value", "threshold": 3.0},
+            "scheduler": {"name": "plateau", "factor": 0.5, "patience": 5, "min_lr": 1e-6, "threshold": 1e-5},
+        },
         "model_type": "Tabular or TimeSeries"  # Should be one of "Tabular" or "TimeSeries"
     },
   }
@@ -288,13 +295,18 @@ model_feedback_generation:
 
     
   user: |-
-    {% if sota_hypothesis %} 
-    # SOTA Round Information:
-    Hypothesis: {{ sota_hypothesis.hypothesis }}
-    Specific Task: {{ sota_task }}
-    Code Implementation: {{ sota_code }}
+    {% if has_sota %}
+    # SOTA Model Information:
+    {% if sota_model_hypothesis %}
+    Hypothesis: {{ sota_model_hypothesis.hypothesis }}
+    Specific Task: {{ sota_model_task }}
+    Code Implementation: {{ sota_model_code }}
     {% else %}
-    # This is the first round. No previous information available. As long as the performance is not too negative (eg.ICIR is greater than 0), treat it as successful. Do not set the threshold too high.  
+    No custom model has been accepted. The SOTA result uses the following default model:
+    {{ sota_model_code }}
+    {% endif %}
+    {% else %}
+    # No previous SOTA or baseline result is available.
     {% endif %} 
     
     # Current Round Information:

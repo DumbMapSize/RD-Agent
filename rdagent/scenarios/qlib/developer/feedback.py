@@ -3,11 +3,14 @@ from pathlib import Path
 from typing import Any, Dict
 
 import pandas as pd
+import yaml
 
 from rdagent.core.experiment import Experiment
 from rdagent.core.proposal import Experiment2Feedback, HypothesisFeedback, Trace
 from rdagent.log import rdagent_logger as logger
 from rdagent.oai.llm_utils import APIBackend
+from rdagent.scenarios.qlib.experiment.factor_experiment import QlibFactorExperiment
+from rdagent.scenarios.qlib.experiment.model_experiment import QlibModelExperiment
 from rdagent.scenarios.qlib.experiment.quant_experiment import QlibQuantScenario
 from rdagent.utils import convert2bool
 from rdagent.utils.agent.tpl import T
@@ -36,6 +39,44 @@ PORTFOLIO_METRICS = (
 )
 GROSS_ANNUALIZED_RETURN = "1day.excess_return_without_cost.annualized_return"
 NET_ANNUALIZED_RETURN = "1day.excess_return_with_cost.annualized_return"
+
+
+def _default_model_implementation(experiment: Experiment) -> str | None:
+    workspace_files = experiment.experiment_workspace.file_dict
+    for config_name in ("conf_combined_factors.yaml", "conf_baseline.yaml"):
+        if config_text := workspace_files.get(config_name):
+            config = yaml.safe_load(config_text)
+            model = config.get("task", {}).get("model") if isinstance(config, dict) else None
+            if model:
+                return "QLib built-in model configuration:\n" + yaml.safe_dump(
+                    model,
+                    sort_keys=False,
+                ).strip()
+
+    return None
+
+
+def _last_accepted_model_experiment(trace: Trace) -> QlibModelExperiment | None:
+    for experiment, feedback in reversed(trace.hist):
+        if feedback.decision and isinstance(experiment, QlibModelExperiment):
+            return experiment
+
+    return None
+
+
+def _initial_factor_baseline_experiment(trace: Trace) -> QlibFactorExperiment | None:
+    for experiment, _ in trace.hist:
+        if not isinstance(experiment, QlibFactorExperiment) or not experiment.based_experiments:
+            continue
+        baseline_experiment = experiment.based_experiments[0]
+        if (
+            isinstance(baseline_experiment, QlibFactorExperiment)
+            and not baseline_experiment.sub_tasks
+            and baseline_experiment.result is not None
+        ):
+            return baseline_experiment
+
+    return None
 
 
 def _as_metric_series(result: Any) -> pd.Series:
@@ -209,14 +250,29 @@ class QlibModelExperiment2Feedback(Experiment2Feedback):
 
         # Generate the user prompt
         SOTA_hypothesis, SOTA_experiment = trace.get_sota_hypothesis_and_experiment()
+        comparison_experiment = (
+            SOTA_experiment if SOTA_hypothesis else _initial_factor_baseline_experiment(trace)
+        )
+        SOTA_model_experiment = _last_accepted_model_experiment(trace) if SOTA_hypothesis else None
+        if SOTA_model_experiment is not None:
+            SOTA_model_hypothesis = SOTA_model_experiment.hypothesis
+            SOTA_model_task = SOTA_model_experiment.sub_tasks[0].get_task_information()
+            SOTA_model_code = SOTA_model_experiment.sub_workspace_list[0].file_dict.get("model.py")
+        else:
+            SOTA_model_hypothesis = None
+            SOTA_model_task = None
+            SOTA_model_code = (
+                _default_model_implementation(comparison_experiment) if comparison_experiment is not None else None
+            )
         combined_result = process_results(
             exp.result,
-            SOTA_experiment.result if SOTA_hypothesis else None,
+            comparison_experiment.result if comparison_experiment is not None else None,
         ) if exp.result is not None else "execution failed"
         user_prompt = T("scenarios.qlib.prompts:model_feedback_generation.user").r(
-            sota_hypothesis=SOTA_hypothesis,
-            sota_task=SOTA_experiment.sub_tasks[0].get_task_information() if SOTA_hypothesis else None,
-            sota_code=SOTA_experiment.sub_workspace_list[0].file_dict.get("model.py") if SOTA_hypothesis else None,
+            has_sota=comparison_experiment is not None,
+            sota_model_hypothesis=SOTA_model_hypothesis,
+            sota_model_task=SOTA_model_task,
+            sota_model_code=SOTA_model_code,
             hypothesis=hypothesis,
             exp=exp,
             combined_result=combined_result,

@@ -13,6 +13,7 @@ from rdagent.log import rdagent_logger as logger
 from rdagent.scenarios.qlib.developer.utils import process_factor_data
 from rdagent.scenarios.qlib.experiment.factor_experiment import QlibFactorExperiment
 from rdagent.scenarios.qlib.experiment.model_experiment import QlibModelExperiment
+from rdagent.scenarios.qlib.experiment.model_training import build_model_run_env, inject_model_training_adapter
 
 DIRNAME = Path(__file__).absolute().resolve().parent
 DIRNAME_local = Path.cwd()
@@ -165,25 +166,13 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
                 exp.experiment_workspace.inject_files(
                     **{"model.py": sota_model_exp.sub_workspace_list[0].file_dict["model.py"]}
                 )
-                env_to_use = {"PYTHONPATH": "./"}
-                sota_training_hyperparameters = sota_model_exp.sub_tasks[0].training_hyperparameters
-                if sota_training_hyperparameters:
-                    env_to_use.update(
-                        {
-                            "n_epochs": str(sota_training_hyperparameters.get("n_epochs", "100")),
-                            "lr": str(sota_training_hyperparameters.get("lr", "2e-4")),
-                            "early_stop": str(sota_training_hyperparameters.get("early_stop", 10)),
-                            "batch_size": str(sota_training_hyperparameters.get("batch_size", 256)),
-                            "weight_decay": str(sota_training_hyperparameters.get("weight_decay", 0.0001)),
-                        }
-                    )
-                sota_model_type = sota_model_exp.sub_tasks[0].model_type
-                if sota_model_type == "TimeSeries":
-                    env_to_use.update(
-                        {"dataset_cls": "TSDatasetH", "num_features": num_features, "step_len": 20, "num_timesteps": 20}
-                    )
-                elif sota_model_type == "Tabular":
-                    env_to_use.update({"dataset_cls": "DatasetH", "num_features": num_features})
+                inject_model_training_adapter(exp.experiment_workspace)
+                sota_task = sota_model_exp.sub_tasks[0]
+                env_to_use = build_model_run_env(
+                    sota_task.training_hyperparameters,
+                    sota_task.model_type,
+                    num_features=num_features,
+                )
 
                 # model + combined factors
                 result, stdout = exp.experiment_workspace.execute(

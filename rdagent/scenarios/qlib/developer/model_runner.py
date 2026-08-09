@@ -7,6 +7,11 @@ from rdagent.log import rdagent_logger as logger
 from rdagent.scenarios.qlib.developer.utils import process_factor_data
 from rdagent.scenarios.qlib.experiment.factor_experiment import QlibFactorExperiment
 from rdagent.scenarios.qlib.experiment.model_experiment import QlibModelExperiment
+from rdagent.scenarios.qlib.experiment.model_training import (
+    build_model_run_env,
+    inject_model_training_adapter,
+    normalize_model_type,
+)
 
 
 class QlibModelRunner(CachedRunner[QlibModelExperiment]):
@@ -55,43 +60,32 @@ class QlibModelRunner(CachedRunner[QlibModelExperiment]):
             raise ModelEmptyError("model.py is empty")
         # to replace & inject code
         exp.experiment_workspace.inject_files(**{"model.py": exp.sub_workspace_list[0].file_dict["model.py"]})
+        inject_model_training_adapter(exp.experiment_workspace)
 
-        env_to_use = {"PYTHONPATH": "./"}
-
-        training_hyperparameters = exp.sub_tasks[0].training_hyperparameters
-        if training_hyperparameters:
-            env_to_use.update(
-                {
-                    "n_epochs": str(training_hyperparameters.get("n_epochs", "100")),
-                    "lr": str(training_hyperparameters.get("lr", "2e-4")),
-                    "early_stop": str(training_hyperparameters.get("early_stop", 10)),
-                    "batch_size": str(training_hyperparameters.get("batch_size", 256)),
-                    "weight_decay": str(training_hyperparameters.get("weight_decay", 0.0001)),
-                }
-            )
+        task = exp.sub_tasks[0]
+        model_type = normalize_model_type(task.model_type)
+        env_to_use = build_model_run_env(
+            task.training_hyperparameters,
+            model_type,
+            num_features=num_features if exist_sota_factor_exp else None,
+        )
 
         logger.info(f"start to run {exp.sub_tasks[0].name} model")
-        if exp.sub_tasks[0].model_type == "TimeSeries":
+        if model_type == "TimeSeries":
             if exist_sota_factor_exp:
-                env_to_use.update(
-                    {"dataset_cls": "TSDatasetH", "num_features": num_features, "step_len": 20, "num_timesteps": 20}
-                )
                 result, stdout = exp.experiment_workspace.execute(
                     qlib_config_name="conf_sota_factors_model.yaml", run_env=env_to_use
                 )
             else:
-                env_to_use.update({"dataset_cls": "TSDatasetH", "step_len": 20, "num_timesteps": 20})
                 result, stdout = exp.experiment_workspace.execute(
                     qlib_config_name="conf_baseline_factors_model.yaml", run_env=env_to_use
                 )
-        elif exp.sub_tasks[0].model_type == "Tabular":
+        else:
             if exist_sota_factor_exp:
-                env_to_use.update({"dataset_cls": "DatasetH", "num_features": num_features})
                 result, stdout = exp.experiment_workspace.execute(
                     qlib_config_name="conf_sota_factors_model.yaml", run_env=env_to_use
                 )
             else:
-                env_to_use.update({"dataset_cls": "DatasetH"})
                 result, stdout = exp.experiment_workspace.execute(
                     qlib_config_name="conf_baseline_factors_model.yaml", run_env=env_to_use
                 )
