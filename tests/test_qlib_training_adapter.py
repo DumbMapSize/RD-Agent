@@ -127,6 +127,13 @@ def test_training_hyperparameters_normalize_common_llm_aliases() -> None:
     assert config["time_series_lookback"] == 32
 
 
+@pytest.mark.parametrize("gradient_clip", ["none", {"mode": "none"}, {"mode": "none", "threshold": 0.0}])
+def test_training_hyperparameters_allow_zero_threshold_when_clipping_is_disabled(gradient_clip) -> None:
+    config = normalize_training_hyperparameters({"gradient_clip": gradient_clip}, "Tabular")
+
+    assert config["gradient_clip"] == {"mode": "none", "threshold": 0.0}
+
+
 @pytest.mark.parametrize(
     ("field", "value", "section", "normalized_field", "expected"),
     [
@@ -301,6 +308,13 @@ def test_adapter_norm_clipping_constrains_gradient_norm() -> None:
 
     total_norm = math.sqrt(sum(float(parameter.grad.square().sum()) for parameter in trainer.dnn_model.parameters()))
     assert total_norm <= 0.250001
+
+
+def test_adapter_accepts_zero_gradient_clip_threshold_when_clipping_is_disabled() -> None:
+    trainer = _trainer(gradient_clip_mode="none", gradient_clip_threshold=0.0)
+
+    assert trainer.gradient_clip_mode == "none"
+    assert trainer.gradient_clip_threshold == 0.0
 
 
 def test_adapter_trains_tabular_and_time_series_model_shapes() -> None:

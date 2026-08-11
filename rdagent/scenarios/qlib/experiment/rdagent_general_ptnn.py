@@ -66,8 +66,9 @@ class GeneralPTNN(QlibGeneralPTNN):
         clip_mode = str(gradient_clip_mode).lower()
         if clip_mode not in {"none", "value", "norm"}:
             raise ValueError(f"Unsupported gradient_clip_mode: {gradient_clip_mode}")
-        if float(gradient_clip_threshold) <= 0.0:
-            raise ValueError("gradient_clip_threshold must be positive")
+        clip_threshold = float(gradient_clip_threshold)
+        if clip_threshold < 0.0 or (clip_mode != "none" and clip_threshold == 0.0):
+            raise ValueError("gradient_clip_threshold must be non-negative for none and positive otherwise")
 
         scheduler_name = str(scheduler).lower()
         if scheduler_name not in {"none", "plateau"}:
@@ -106,7 +107,7 @@ class GeneralPTNN(QlibGeneralPTNN):
         self.optimizer_momentum = momentum
         self.huber_delta = float(huber_delta)
         self.gradient_clip_mode = clip_mode
-        self.gradient_clip_threshold = float(gradient_clip_threshold)
+        self.gradient_clip_threshold = clip_threshold
         self.scheduler = scheduler_name
 
         if optimizer_name == "adamw":

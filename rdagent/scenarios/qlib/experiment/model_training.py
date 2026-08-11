@@ -175,10 +175,10 @@ def _normalise_gradient_clip(raw: dict[str, Any]) -> dict[str, Any]:
         },
     )
     threshold = _as_float(
-        config.get("threshold", 3.0),
+        config.get("threshold", 0.0 if mode == "none" else 3.0),
         "gradient_clip.threshold",
         minimum=0.0,
-        strict_minimum=True,
+        strict_minimum=mode != "none",
     )
     return {"mode": mode, "threshold": threshold}
 
