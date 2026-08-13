@@ -105,6 +105,9 @@ def test_quant_hypothesis_output_contract_does_not_request_action():
     assert '"action"' not in with_knowledge
     assert '"external_knowledge_ref"' not in without_knowledge
     assert '"external_knowledge_ref"' in with_knowledge
+    assert "follow the method described in the knowledge item as the default" not in without_knowledge
+    assert "follow the method described in the knowledge item as the default" in with_knowledge
+    assert "Make only limited adaptations" in with_knowledge
     assert field(without_knowledge, "hypothesis") == field(with_knowledge, "hypothesis")
     assert field(without_knowledge, "reason") == field(with_knowledge, "reason")
 

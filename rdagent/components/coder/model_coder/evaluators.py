@@ -47,6 +47,10 @@ class ModelCoSTEEREvaluator(CoSTEEREvaluator):
         batch_size = 8
         num_features = 30
         num_timesteps = 40
+        if target_task.model_type == "TimeSeries" and isinstance(target_task.training_hyperparameters, dict):
+            lookback = target_task.training_hyperparameters.get("time_series_lookback")
+            if lookback is not None:
+                num_timesteps = int(lookback)
         input_value = 0.4
         param_init_value = 0.6
 

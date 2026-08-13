@@ -118,7 +118,7 @@ hypothesis_output_format_with_action: |-
   "hypothesis": "The new hypothesis generated based on the information provided,should be a string.",
   "reason": "The reason why you generate this hypothesis. It should be comprehensive and logical. It should cover the other keys below and extend them. Limit in two or three sentences.",
   {% if include_external_knowledge_ref %}
-  "external_knowledge_ref": "The single KNOWLEDGE_ID string from the external research knowledge that this hypothesis substantially uses. Return an empty string if no external knowledge was used. Do not infer or invent IDs.",
+  "external_knowledge_ref": "The single KNOWLEDGE_ID string from the external research knowledge that this hypothesis substantially uses. When external knowledge is used, follow the method described in the knowledge item as the default and carry its implementation-relevant details directly into the hypothesis instead of merely naming or citing it. Make only limited adaptations when required by the current interface or clearly justified by concrete experimental feedback. Return an empty string if no external knowledge was used. Do not infer or invent IDs.",
   {% endif %}
   }
 

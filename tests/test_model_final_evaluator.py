@@ -2,9 +2,12 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import numpy as np
 import pytest
 
+from rdagent.components.coder.model_coder import evaluators
 from rdagent.components.coder.model_coder import eva_utils
+from rdagent.components.coder.model_coder.evaluators import ModelCoSTEEREvaluator
 from rdagent.components.coder.model_coder.eva_utils import ModelFinalEvaluator, _parse_final_decision
 from rdagent.components.coder.model_coder.model import ModelFBWorkspace, ModelTask
 
@@ -62,3 +65,34 @@ def test_model_final_evaluator_treats_false_string_as_false(monkeypatch) -> None
 
     assert feedback == "implementation is invalid"
     assert decision is False
+
+
+def test_model_costeer_evaluator_uses_declared_time_series_lookback(monkeypatch) -> None:
+    task = ModelTask(
+        name="test_time_series_model",
+        description="test model",
+        architecture="fixed 20-step model",
+        hyperparameters={},
+        training_hyperparameters={"time_series_lookback": 20},
+        model_type="TimeSeries",
+    )
+    workspace = ModelFBWorkspace(target_task=task)
+    execute = Mock(return_value=("execution succeeded", np.zeros((8, 1))))
+    monkeypatch.setattr(workspace, "execute", execute)
+    monkeypatch.setattr(evaluators, "shape_evaluator", lambda *_args: ("shape ok", True))
+    monkeypatch.setattr(evaluators, "value_evaluator", lambda *_args: ("value ok", True))
+    monkeypatch.setattr(evaluators.ModelCodeEvaluator, "evaluate", lambda *_args, **_kwargs: ("code ok", True))
+    monkeypatch.setattr(
+        evaluators.ModelFinalEvaluator,
+        "evaluate",
+        lambda *_args, **_kwargs: ("implementation accepted", True),
+    )
+
+    feedback = ModelCoSTEEREvaluator(scen=SimpleNamespace(model_output_channel=1)).evaluate(
+        target_task=task,
+        implementation=workspace,
+        gt_implementation=None,
+    )
+
+    assert execute.call_args.kwargs["num_timesteps"] == 20
+    assert feedback.final_decision is True

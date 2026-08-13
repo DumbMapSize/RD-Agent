@@ -135,6 +135,34 @@ def test_training_hyperparameters_allow_zero_threshold_when_clipping_is_disabled
 
 
 @pytest.mark.parametrize(
+    "scheduler",
+    [
+        "none",
+        {"name": "none"},
+        {"name": "none", "factor": 1.0, "patience": 0, "min_lr": 8e-5, "threshold": 0.0},
+    ],
+)
+def test_training_hyperparameters_ignore_inactive_scheduler_options(scheduler) -> None:
+    config = normalize_training_hyperparameters({"scheduler": scheduler}, "Tabular")
+
+    assert config["scheduler"] == {
+        "name": "none",
+        "factor": 0.5,
+        "patience": 5,
+        "min_lr": 1e-6,
+        "threshold": 1e-5,
+    }
+
+
+def test_training_hyperparameters_still_validate_active_scheduler_options() -> None:
+    with pytest.raises(ValueError, match="scheduler.factor must be < 1.0"):
+        normalize_training_hyperparameters(
+            {"scheduler": {"name": "plateau", "factor": 1.0}},
+            "Tabular",
+        )
+
+
+@pytest.mark.parametrize(
     ("field", "value", "section", "normalized_field", "expected"),
     [
         ("optimizer_momentum", 0.0, "optimizer", "momentum", 0.0),

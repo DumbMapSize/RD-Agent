@@ -211,6 +211,15 @@ def _normalise_scheduler(raw: dict[str, Any]) -> dict[str, Any]:
             "constant": "none",
         },
     )
+    if name == "none":
+        defaults = DEFAULT_TRAINING_HYPERPARAMETERS["scheduler"]
+        return {
+            "name": "none",
+            "factor": defaults["factor"],
+            "patience": defaults["patience"],
+            "min_lr": defaults["min_lr"],
+            "threshold": defaults["threshold"],
+        }
     factor = _as_float(config.get("factor", 0.5), "scheduler.factor", minimum=0.0, strict_minimum=True)
     if factor >= 1.0:
         raise ValueError("training_hyperparameters.scheduler.factor must be < 1.0")
