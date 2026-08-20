@@ -27,29 +27,36 @@ class Metrics:
                 self.rank_icir,
                 self.arr,
                 self.ir,
-                -self.mdd,
+                -abs(self.mdd),
                 self.sharpe,
             ]
         )
 
 
-def extract_metrics_from_experiment(experiment) -> Metrics:
+def extract_metrics_from_experiment(experiment) -> Metrics | None:
     """Extract metrics from experiment feedback"""
     try:
         result = experiment.result
-        ic = result.get("IC", 0.0)
-        icir = result.get("ICIR", 0.0)
-        rank_ic = result.get("Rank IC", 0.0)
-        rank_icir = result.get("Rank ICIR", 0.0)
-        arr = result.get("1day.excess_return_with_cost.annualized_return", 0.0)
-        ir = result.get("1day.excess_return_with_cost.information_ratio", 0.0)
-        mdd = result.get("1day.excess_return_with_cost.max_drawdown", 1.0)  # Avoid division by zero
-        sharpe = arr / -mdd if mdd != 0 else 0.0
+        keys = (
+            "IC",
+            "ICIR",
+            "Rank IC",
+            "Rank ICIR",
+            "1day.excess_return_with_cost.annualized_return",
+            "1day.excess_return_with_cost.information_ratio",
+            "1day.excess_return_with_cost.max_drawdown",
+        )
+        if result is None or any(key not in result for key in keys):
+            return None
+
+        ic, icir, rank_ic, rank_icir, arr, ir, mdd = (float(result[key]) for key in keys)
+        if not all(math.isfinite(value) for value in (ic, icir, rank_ic, rank_icir, arr, ir, mdd)):
+            return None
+        sharpe = arr / abs(mdd) if mdd != 0 else 0.0
 
         return Metrics(ic=ic, icir=icir, rank_ic=rank_ic, rank_icir=rank_icir, arr=arr, ir=ir, mdd=mdd, sharpe=sharpe)
-    except Exception as e:
-        print(f"Error extracting metrics: {e}")
-        return Metrics()
+    except (AttributeError, TypeError, ValueError):
+        return None
 
 
 class LinearThompsonTwoArm:
@@ -82,10 +89,12 @@ class LinearThompsonTwoArm:
         return float(np.dot(w_sample, x))
 
     def update(self, arm: str, x: np.ndarray, r: float) -> None:
-        P = self.precision[arm]
-        P += np.outer(x, x) / self.noise_var
-        self.precision[arm] = P
-        self.mean[arm] = np.linalg.solve(P, P @ self.mean[arm] + (r / self.noise_var) * x)
+        old_precision = self.precision[arm]
+        old_natural_mean = old_precision @ self.mean[arm]
+        new_precision = old_precision + np.outer(x, x) / self.noise_var
+        new_natural_mean = old_natural_mean + (r / self.noise_var) * x
+        self.precision[arm] = new_precision
+        self.mean[arm] = np.linalg.solve(new_precision, new_natural_mean)
 
     def next_arm(self, x: np.ndarray) -> str:
         scores = {arm: self.sample_reward(arm, x) for arm in ("factor", "model")}
@@ -94,7 +103,9 @@ class LinearThompsonTwoArm:
 
 class EnvController:
     def __init__(self, weights: Tuple[float, ...] = None) -> None:
-        self.weights = np.asarray(weights or (0.1, 0.1, 0.05, 0.05, 0.25, 0.15, 0.1, 0.2))
+        self.weights = np.asarray(
+            weights if weights is not None else (0.1, 0.1, 0.05, 0.05, 0.25, 0.15, 0.1, 0.2)
+        )
         self.bandit = LinearThompsonTwoArm(dim=8, prior_var=10.0, noise_var=0.5)
 
     def reward(self, m: Metrics) -> float:
@@ -107,3 +118,7 @@ class EnvController:
     def record(self, m: Metrics, arm: str) -> None:
         r = self.reward(m)
         self.bandit.update(arm, m.as_vector(), r)
+
+    def record_improvement(self, context: Metrics, outcome: Metrics, arm: str) -> None:
+        reward_delta = outcome.arr - context.arr
+        self.bandit.update(arm, context.as_vector(), reward_delta)

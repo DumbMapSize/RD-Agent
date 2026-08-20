@@ -8,6 +8,7 @@ from rdagent.core.proposal import Hypothesis, Scenario, Trace
 from rdagent.oai.llm_utils import APIBackend
 from rdagent.scenarios.qlib.proposal.bandit import (
     EnvController,
+    Metrics,
     extract_metrics_from_experiment,
 )
 from rdagent.utils.agent.tpl import T
@@ -18,6 +19,47 @@ class QuantTrace(Trace):
         super().__init__(scen)
         # Initialize the controller with default weights
         self.controller = EnvController()
+
+
+def _current_strategy_metrics(history: list[Trace.NodeType]) -> Metrics | None:
+    for experiment, feedback in reversed(history):
+        if getattr(feedback, "decision", False) and getattr(feedback, "exception", None) is None:
+            if metrics := extract_metrics_from_experiment(experiment):
+                return metrics
+
+    for experiment, _ in history:
+        for baseline in getattr(experiment, "based_experiments", []) or []:
+            if metrics := extract_metrics_from_experiment(baseline):
+                return metrics
+    return None
+
+
+def _record_bandit_experiment(controller: EnvController, history: list[Trace.NodeType], index: int) -> bool:
+    experiment, feedback = history[index]
+    if getattr(feedback, "exception", None) is not None:
+        return False
+
+    outcome = extract_metrics_from_experiment(experiment)
+    if outcome is None:
+        return False
+
+    action = getattr(getattr(experiment, "hypothesis", None), "action", None)
+    if action not in {"factor", "model"}:
+        return False
+
+    context = None
+    if action == "factor":
+        for baseline in reversed(getattr(experiment, "based_experiments", []) or []):
+            if context := extract_metrics_from_experiment(baseline):
+                break
+    if context is None:
+        context = _current_strategy_metrics(history[:index])
+
+    if context is None:
+        return False
+
+    controller.record_improvement(context, outcome, action)
+    return True
 
 
 class QlibQuantHypothesis(Hypothesis):
@@ -54,10 +96,9 @@ class QlibQuantHypothesisGen(FactorAndModelHypothesisGen):
         # ========= Bandit ==========
         if QUANT_PROP_SETTING.action_selection == "bandit":
             if len(trace.hist) > 0:
-                metric = extract_metrics_from_experiment(trace.hist[-1][0])
-                prev_action = trace.hist[-1][0].hypothesis.action
-                trace.controller.record(metric, prev_action)
-                action = trace.controller.decide(metric)
+                _record_bandit_experiment(trace.controller, trace.hist, len(trace.hist) - 1)
+                current_metrics = _current_strategy_metrics(trace.hist)
+                action = trace.controller.decide(current_metrics) if current_metrics is not None else "factor"
             else:
                 action = "factor"
         # ========= LLM ==========
