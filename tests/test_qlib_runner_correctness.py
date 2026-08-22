@@ -101,6 +101,19 @@ def test_model_runner_forwards_supported_training_hyperparameters() -> None:
             "optimizer_momentum": "0.0",
             "loss": "mse",
             "huber_delta": "1.0",
+            "loss_temperature": "1.0",
+            "tail_fraction": "0.2",
+            "tail_top_weight": "2.0",
+            "tail_bottom_weight": "1.0",
+            "ordinal_num_bins": "5",
+            "sam_enabled": "false",
+            "sam_rho": "0.05",
+            "sam_adaptive": "false",
+            "batch_mode": "sample",
+            "train_shuffle": "true",
+            "train_drop_last": "true",
+            "checkpoint_metric": "loss",
+            "checkpoint_topk": "20",
             "gradient_clip_mode": "value",
             "gradient_clip_threshold": "3.0",
             "scheduler": "plateau",
@@ -169,7 +182,16 @@ def test_factor_runner_reuses_sota_model_training_config_and_adapter(monkeypatch
         hyperparameters={},
         training_hyperparameters={
             "optimizer": {"name": "adamw"},
-            "loss": {"name": "mae"},
+            "loss": {
+                "name": "tail_listnet",
+                "temperature": 0.8,
+                "tail_fraction": 0.15,
+                "top_weight": 3.0,
+                "bottom_weight": 1.5,
+            },
+            "sam": {"enabled": True, "rho": 0.04, "adaptive": True},
+            "data_loader": {"batch_mode": "date", "shuffle": False, "drop_last": False},
+            "checkpoint": {"metric": "rank_ic", "topk": 20},
             "gradient_clip": {"mode": "norm", "threshold": 0.6},
             "scheduler": {"name": "none"},
             "time_series_lookback": 31,
@@ -204,7 +226,15 @@ def test_factor_runner_reuses_sota_model_training_config_and_adapter(monkeypatch
     assert {"rdagent_general_ptnn.py"} in injected_names
     run_env = candidate.experiment_workspace.execute.call_args.kwargs["run_env"]
     assert run_env["optimizer"] == "adamw"
-    assert run_env["loss"] == "mae"
+    assert run_env["loss"] == "tail_listnet"
+    assert run_env["loss_temperature"] == "0.8"
+    assert run_env["tail_fraction"] == "0.15"
+    assert run_env["sam_enabled"] == "true"
+    assert run_env["sam_adaptive"] == "true"
+    assert run_env["batch_mode"] == "date"
+    assert run_env["train_shuffle"] == "false"
+    assert run_env["train_drop_last"] == "false"
+    assert run_env["checkpoint_metric"] == "rank_ic"
     assert run_env["gradient_clip_mode"] == "norm"
     assert run_env["scheduler"] == "none"
     assert run_env["step_len"] == run_env["num_timesteps"] == "31"

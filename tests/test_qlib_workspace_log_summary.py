@@ -9,7 +9,7 @@ def test_extract_training_log_summary_supports_positive_and_negative_qlib_genera
             "[5771:MainThread](2026-06-24 22:23:18,565) INFO - qlib.GeneralPTNN - "
             "[pytorch_general_nn.py:305] - Epoch0: train 0.995449, valid 0.996051",
             "[5771:MainThread](2026-06-24 22:23:19,565) INFO - qlib.GeneralPTNN - "
-            "[pytorch_general_nn.py:305] - Epoch1: train -0.123000, valid -0.456000",
+            "[rdagent_general_ptnn.py:612] - Epoch1: train -0.123000, valid -0.456000",
             "[5771:MainThread](2026-06-24 22:23:39,509) INFO - qlib.GeneralPTNN - "
             "[pytorch_general_nn.py:327] - best score: 0.995410 @ 2 epoch",
         ]

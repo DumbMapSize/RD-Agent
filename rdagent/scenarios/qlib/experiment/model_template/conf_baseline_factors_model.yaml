@@ -65,6 +65,19 @@ task:
             scheduler_threshold: {{ scheduler_threshold }}
             metric: loss
             loss: {{ loss }}
+            loss_temperature: {{ loss_temperature }}
+            tail_fraction: {{ tail_fraction }}
+            tail_top_weight: {{ tail_top_weight }}
+            tail_bottom_weight: {{ tail_bottom_weight }}
+            ordinal_num_bins: {{ ordinal_num_bins }}
+            sam_enabled: {{ sam_enabled }}
+            sam_rho: {{ sam_rho }}
+            sam_adaptive: {{ sam_adaptive }}
+            batch_mode: {{ batch_mode }}
+            train_shuffle: {{ train_shuffle }}
+            train_drop_last: {{ train_drop_last }}
+            checkpoint_metric: {{ checkpoint_metric }}
+            checkpoint_topk: {{ checkpoint_topk }}
             n_jobs: 8
             GPU: 0
             pt_model_uri: "model.model_cls"

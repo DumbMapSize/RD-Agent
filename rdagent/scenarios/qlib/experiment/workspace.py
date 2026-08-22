@@ -16,7 +16,7 @@ _TRAINING_LOG_SUMMARY_RE = re.compile(
 )
 _QLIB_GENERAL_PTNN_LOG_PREFIX_RE = re.compile(
     r"^\[\d+:[^\]]+\]\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}\) "
-    r"INFO - qlib\.GeneralPTNN - \[pytorch_general_nn\.py:\d+\] - (?P<message>.*)$"
+    r"INFO - qlib\.GeneralPTNN - \[(?:pytorch_general_nn|rdagent_general_ptnn)\.py:\d+\] - (?P<message>.*)$"
 )
 
 

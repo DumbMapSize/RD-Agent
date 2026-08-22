@@ -12,6 +12,9 @@ DEFAULT_TRAINING_HYPERPARAMETERS = {
     "weight_decay": 1e-4,
     "optimizer": {"name": "adam", "momentum": 0.0},
     "loss": {"name": "mse", "huber_delta": 1.0},
+    "sam": {"enabled": False, "rho": 0.05, "adaptive": False},
+    "data_loader": {"batch_mode": "sample", "shuffle": True, "drop_last": True},
+    "checkpoint": {"metric": "loss", "topk": 20},
     "gradient_clip": {"mode": "value", "threshold": 3.0},
     "scheduler": {
         "name": "plateau",
@@ -23,7 +26,16 @@ DEFAULT_TRAINING_HYPERPARAMETERS = {
 }
 
 _CORE_KEYS = {"n_epochs", "lr", "early_stop", "batch_size", "weight_decay"}
-_STRUCTURED_KEYS = {"optimizer", "loss", "gradient_clip", "scheduler", "time_series_lookback"}
+_STRUCTURED_KEYS = {
+    "optimizer",
+    "loss",
+    "sam",
+    "data_loader",
+    "checkpoint",
+    "gradient_clip",
+    "scheduler",
+    "time_series_lookback",
+}
 _COMPATIBILITY_KEYS = {
     "optimizer_momentum",
     "huber_delta",
@@ -84,6 +96,18 @@ def _as_int(value: Any, field: str, *, minimum: int) -> int:
     return result
 
 
+def _as_bool(value: Any, field: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1"}:
+            return True
+        if normalized in {"false", "no", "0"}:
+            return False
+    raise ValueError(f"training_hyperparameters.{field} must be boolean")
+
+
 def _canonical_name(value: Any, field: str, aliases: dict[str, str]) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"training_hyperparameters.{field} must be a non-empty string")
@@ -121,7 +145,19 @@ def _normalise_loss(raw: dict[str, Any]) -> dict[str, Any]:
     loss_is_explicit = "loss" in raw
     value = raw.get("loss", DEFAULT_TRAINING_HYPERPARAMETERS["loss"])
     config = {"name": value} if isinstance(value, str) else _as_mapping(value, "loss")
-    _check_keys(config, {"name", "huber_delta"}, "loss")
+    _check_keys(
+        config,
+        {
+            "name",
+            "huber_delta",
+            "temperature",
+            "tail_fraction",
+            "top_weight",
+            "bottom_weight",
+            "num_bins",
+        },
+        "loss",
+    )
     if "huber_delta" in raw:
         if loss_is_explicit and "huber_delta" in config:
             raise ValueError("Specify loss.huber_delta or huber_delta, not both")
@@ -139,10 +175,117 @@ def _normalise_loss(raw: dict[str, Any]) -> dict[str, Any]:
             "meanabsoluteerror": "mae",
             "huber": "huber",
             "huberloss": "huber",
+            "pairwise": "pairwise",
+            "ranknet": "pairwise",
+            "listnet": "listnet",
+            "taillistnet": "tail_listnet",
+            "tailawarelistnet": "tail_listnet",
+            "ordinal": "ordinal",
+            "cumulativeordinal": "ordinal",
         },
     )
+    conditional_fields = {
+        "temperature": {"pairwise", "listnet", "tail_listnet"},
+        "tail_fraction": {"tail_listnet"},
+        "top_weight": {"tail_listnet"},
+        "bottom_weight": {"tail_listnet"},
+        "num_bins": {"ordinal"},
+    }
+    for field, allowed_losses in conditional_fields.items():
+        if field in config and name not in allowed_losses:
+            allowed = ", ".join(sorted(allowed_losses))
+            raise ValueError(
+                f"training_hyperparameters.loss.{field} is only valid for {allowed} loss"
+            )
     delta = _as_float(config.get("huber_delta", 1.0), "loss.huber_delta", minimum=0.0, strict_minimum=True)
-    return {"name": name, "huber_delta": delta}
+    normalized = {"name": name, "huber_delta": delta}
+    if name in {"pairwise", "listnet", "tail_listnet"}:
+        normalized["temperature"] = _as_float(
+            config.get("temperature", 1.0),
+            "loss.temperature",
+            minimum=0.0,
+            strict_minimum=True,
+        )
+    if name == "tail_listnet":
+        tail_fraction = _as_float(
+            config.get("tail_fraction", 0.2),
+            "loss.tail_fraction",
+            minimum=0.0,
+            strict_minimum=True,
+        )
+        if tail_fraction > 0.5:
+            raise ValueError("training_hyperparameters.loss.tail_fraction must be <= 0.5")
+        normalized.update(
+            {
+                "tail_fraction": tail_fraction,
+                "top_weight": _as_float(config.get("top_weight", 2.0), "loss.top_weight", minimum=0.0),
+                "bottom_weight": _as_float(
+                    config.get("bottom_weight", 1.0),
+                    "loss.bottom_weight",
+                    minimum=0.0,
+                ),
+            }
+        )
+        if normalized["top_weight"] == 0.0 and normalized["bottom_weight"] == 0.0:
+            raise ValueError("tail_listnet requires a positive top_weight or bottom_weight")
+    if name == "ordinal":
+        normalized["num_bins"] = _as_int(config.get("num_bins", 5), "loss.num_bins", minimum=2)
+    return normalized
+
+
+def _normalise_sam(raw: dict[str, Any]) -> dict[str, Any]:
+    value = raw.get("sam", DEFAULT_TRAINING_HYPERPARAMETERS["sam"])
+    config = _as_mapping(value, "sam")
+    _check_keys(config, {"enabled", "rho", "adaptive"}, "sam")
+    enabled = _as_bool(config.get("enabled", False), "sam.enabled")
+    defaults = DEFAULT_TRAINING_HYPERPARAMETERS["sam"]
+    if not enabled:
+        return dict(defaults)
+    return {
+        "enabled": True,
+        "rho": _as_float(config.get("rho", defaults["rho"]), "sam.rho", minimum=0.0, strict_minimum=True),
+        "adaptive": _as_bool(config.get("adaptive", defaults["adaptive"]), "sam.adaptive"),
+    }
+
+
+def _normalise_data_loader(raw: dict[str, Any]) -> dict[str, Any]:
+    value = raw.get("data_loader", DEFAULT_TRAINING_HYPERPARAMETERS["data_loader"])
+    config = _as_mapping(value, "data_loader")
+    _check_keys(config, {"batch_mode", "shuffle", "drop_last"}, "data_loader")
+    batch_mode = _canonical_name(
+        config.get("batch_mode", "sample"),
+        "data_loader.batch_mode",
+        {"sample": "sample", "row": "sample", "date": "date", "day": "date"},
+    )
+    drop_last = _as_bool(config.get("drop_last", batch_mode == "sample"), "data_loader.drop_last")
+    if batch_mode == "date" and drop_last:
+        raise ValueError("training_hyperparameters.data_loader.drop_last must be false for date batches")
+    return {
+        "batch_mode": batch_mode,
+        "shuffle": _as_bool(config.get("shuffle", True), "data_loader.shuffle"),
+        "drop_last": drop_last,
+    }
+
+
+def _normalise_checkpoint(raw: dict[str, Any]) -> dict[str, Any]:
+    value = raw.get("checkpoint", DEFAULT_TRAINING_HYPERPARAMETERS["checkpoint"])
+    config = _as_mapping(value, "checkpoint")
+    _check_keys(config, {"metric", "topk"}, "checkpoint")
+    metric = _canonical_name(
+        config.get("metric", "loss"),
+        "checkpoint.metric",
+        {
+            "loss": "loss",
+            "ic": "ic",
+            "rankic": "rank_ic",
+            "icir": "icir",
+            "topkprecision": "topk_precision",
+        },
+    )
+    return {
+        "metric": metric,
+        "topk": _as_int(config.get("topk", 20), "checkpoint.topk", minimum=1),
+    }
 
 
 def _normalise_gradient_clip(raw: dict[str, Any]) -> dict[str, Any]:
@@ -248,9 +391,17 @@ def normalize_training_hyperparameters(
         "weight_decay": _as_float(raw.get("weight_decay", 1e-4), "weight_decay", minimum=0.0),
         "optimizer": _normalise_optimizer(raw),
         "loss": _normalise_loss(raw),
+        "sam": _normalise_sam(raw),
+        "data_loader": _normalise_data_loader(raw),
+        "checkpoint": _normalise_checkpoint(raw),
         "gradient_clip": _normalise_gradient_clip(raw),
         "scheduler": _normalise_scheduler(raw),
     }
+    ranking_losses = {"pairwise", "listnet", "tail_listnet"}
+    if normalized["loss"]["name"] in ranking_losses and normalized["data_loader"]["batch_mode"] != "date":
+        raise ValueError("ranking losses require training_hyperparameters.data_loader.batch_mode='date'")
+    if normalized["checkpoint"]["metric"] != "loss" and normalized["data_loader"]["batch_mode"] != "date":
+        raise ValueError("cross-sectional checkpoint metrics require date batches")
     normalized_model_type = normalize_model_type(model_type)
     lookback_fields = [key for key in ("time_series_lookback", "lookback", "step_len") if key in raw]
     if len(lookback_fields) > 1:
@@ -273,6 +424,9 @@ def build_model_run_env(
     config = normalize_training_hyperparameters(training_hyperparameters, model_type)
     optimizer = config["optimizer"]
     loss = config["loss"]
+    sam = config["sam"]
+    data_loader = config["data_loader"]
+    checkpoint = config["checkpoint"]
     clip = config["gradient_clip"]
     scheduler = config["scheduler"]
     env = {
@@ -286,6 +440,19 @@ def build_model_run_env(
         "optimizer_momentum": str(optimizer["momentum"]),
         "loss": loss["name"],
         "huber_delta": str(loss["huber_delta"]),
+        "loss_temperature": str(loss.get("temperature", 1.0)),
+        "tail_fraction": str(loss.get("tail_fraction", 0.2)),
+        "tail_top_weight": str(loss.get("top_weight", 2.0)),
+        "tail_bottom_weight": str(loss.get("bottom_weight", 1.0)),
+        "ordinal_num_bins": str(loss.get("num_bins", 5)),
+        "sam_enabled": str(sam["enabled"]).lower(),
+        "sam_rho": str(sam["rho"]),
+        "sam_adaptive": str(sam["adaptive"]).lower(),
+        "batch_mode": data_loader["batch_mode"],
+        "train_shuffle": str(data_loader["shuffle"]).lower(),
+        "train_drop_last": str(data_loader["drop_last"]).lower(),
+        "checkpoint_metric": checkpoint["metric"],
+        "checkpoint_topk": str(checkpoint["topk"]),
         "gradient_clip_mode": clip["mode"],
         "gradient_clip_threshold": str(clip["threshold"]),
         "scheduler": scheduler["name"],

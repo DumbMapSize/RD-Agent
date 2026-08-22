@@ -130,8 +130,8 @@ model_hypothesis_specification: |-
   5. Focus primarily on the architecture of PyTorch models. Each hypothesis should specifically address architectural decisions, such as layer configurations, activation functions, regularization methods, and overall model structure. DO NOT do any feature-specific processing. Instead, you can propose innovative transformations on the input time-series data to enhance model training effectiveness.
   6. Avoid including input features or training-loop changes outside the supported `training_hyperparameters` interface.
   7. Sometimes, when training performance is poor, adjusting hyperparameters can also be an effective strategy for improvement.
-  8. The supported training interface contains `n_epochs`, `lr`, `early_stop`, `batch_size`, `weight_decay`, `optimizer`, `loss`, `gradient_clip`, and `scheduler`. A TimeSeries model can additionally control `time_series_lookback`.
-  9. `optimizer.name` supports Adam, AdamW, or SGD; only SGD can use `optimizer.momentum`. `loss.name` supports MSE, MAE, or Huber. `gradient_clip.mode` supports value, norm, or none. `scheduler.name` supports plateau or none. Do not propose or claim any other training-loop behavior.
+  8. The supported training interface contains `n_epochs`, `lr`, `early_stop`, `batch_size`, `weight_decay`, `optimizer`, `loss`, `sam`, `data_loader`, `checkpoint`, `gradient_clip`, and `scheduler`. A TimeSeries model can additionally control `time_series_lookback`.
+  9. `optimizer.name` supports Adam, AdamW, or SGD; only SGD can use `optimizer.momentum`. `sam` can enable sharpness-aware updates with `enabled`, `rho`, and `adaptive`. `loss.name` supports `mse`, `mae`, `huber`, `pairwise`, `listnet`, `tail_listnet`, or `ordinal`; ranking losses can use `temperature`, `tail_listnet` can additionally use `tail_fraction`, `top_weight`, and `bottom_weight`, and `ordinal` can use `num_bins`. Pairwise/ListNet losses require `data_loader.batch_mode: date` and `drop_last: false`; `shuffle` controls date order without splitting a date's cross-section. In date mode, each batch is one complete trading-date cross-section, so `batch_size` applies only to sample mode and must not be described as an effective date-mode hyperparameter. Ordinal loss keeps the generated model output scalar and derives label bins from the training fold. `checkpoint.metric` supports `loss`, `ic`, `rank_ic`, `icir`, or `topk_precision`, with `topk` configuring the last metric; non-loss metrics require date batches. `gradient_clip.mode` supports value, norm, or none. `scheduler.name` supports plateau or none. Do not propose or claim any other training-loop behavior.
   10. Use standard libraries for baseline models, but also explore custom architecture designs to investigate novel structures. After sufficient trials with traditional models, aim for innovation comparable to top-tier AI conferences (NeurIPS, ICLR, ICML, SIGKDD, etc.) in time series modeling.
 
 factor_hypothesis_specification: |-
@@ -202,6 +202,9 @@ model_experiment_output_format: |-
             "weight_decay": 1e-4,
             "optimizer": {"name": "adam", "momentum": 0.0},
             "loss": {"name": "mse", "huber_delta": 1.0},
+            "sam": {"enabled": false, "rho": 0.05, "adaptive": false},
+            "data_loader": {"batch_mode": "sample", "shuffle": true, "drop_last": true},
+            "checkpoint": {"metric": "loss", "topk": 20},
             "gradient_clip": {"mode": "value", "threshold": 3.0},
             "scheduler": {"name": "plateau", "factor": 0.5, "patience": 5, "min_lr": 1e-6, "threshold": 1e-5},
         },
