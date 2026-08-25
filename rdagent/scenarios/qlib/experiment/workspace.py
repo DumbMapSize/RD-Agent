@@ -10,9 +10,36 @@ from rdagent.log import rdagent_logger as logger
 from rdagent.utils.env import QlibCondaConf, QlibCondaEnv, QTDockerEnv
 
 _TRAINING_METRIC_VALUE_PATTERN = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
-_TRAINING_LOG_SUMMARY_RE = re.compile(
-    rf"^(?:Epoch\d+: train {_TRAINING_METRIC_VALUE_PATTERN}, valid {_TRAINING_METRIC_VALUE_PATTERN}"
-    rf"|best score: {_TRAINING_METRIC_VALUE_PATTERN} @ \d+ epoch)$"
+_CHECKPOINT_METRIC_PATTERN = r"(?:loss|ic|rank_ic|icir|topk_precision@\d+)"
+_TRAINING_SCORE_PATTERN = rf"(?:{_TRAINING_METRIC_VALUE_PATTERN}|unavailable)"
+_TRAINING_LOG_SUMMARY_PATTERNS = (
+    re.compile(
+        rf"^RD-Agent training context \(authoritative\): optimizer=(?:adam|adamw|sgd); "
+        rf"loss=(?:mse|mae|huber|pairwise|listnet|tail_listnet|ordinal); batch_mode=(?:sample|date); "
+        rf"checkpoint={_CHECKPOINT_METRIC_PATTERN}; direction=(?:minimize|maximize); "
+        rf"scheduler=(?:none|plateau); scheduler_monitor=(?:none|valid_loss); epochs=\d+; "
+        rf"early_stop_patience=\d+$"
+    ),
+    re.compile(
+        rf"^Epoch\d+: train_loss={_TRAINING_METRIC_VALUE_PATTERN}; "
+        rf"valid_loss={_TRAINING_METRIC_VALUE_PATTERN}; lr={_TRAINING_METRIC_VALUE_PATTERN}$"
+    ),
+    re.compile(
+        rf"^Epoch\d+: train_loss={_TRAINING_METRIC_VALUE_PATTERN}; "
+        rf"valid_loss={_TRAINING_METRIC_VALUE_PATTERN}; "
+        rf"train_(?P<metric>{_CHECKPOINT_METRIC_PATTERN})={_TRAINING_SCORE_PATTERN}; "
+        rf"valid_(?P=metric)={_TRAINING_SCORE_PATTERN}; lr={_TRAINING_METRIC_VALUE_PATTERN}$"
+    ),
+    re.compile(rf"^early stop: checkpoint={_CHECKPOINT_METRIC_PATTERN}; patience=\d+; epoch=\d+$"),
+    re.compile(
+        rf"^best checkpoint: metric={_CHECKPOINT_METRIC_PATTERN}; direction=(?:minimize|maximize); "
+        rf"value={_TRAINING_METRIC_VALUE_PATTERN}; epoch=\d+$"
+    ),
+    # Keep QLib's original loss-only output readable for runs that use the base fit loop.
+    re.compile(
+        rf"^Epoch\d+: train {_TRAINING_METRIC_VALUE_PATTERN}, valid {_TRAINING_METRIC_VALUE_PATTERN}$"
+    ),
+    re.compile(rf"^best score: {_TRAINING_METRIC_VALUE_PATTERN} @ \d+ epoch$"),
 )
 _QLIB_GENERAL_PTNN_LOG_PREFIX_RE = re.compile(
     r"^\[\d+:[^\]]+\]\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}\) "
@@ -26,7 +53,7 @@ def _extract_training_log_summary(execute_qlib_log: str) -> str:
         line = raw_line.strip()
         qlib_match = _QLIB_GENERAL_PTNN_LOG_PREFIX_RE.fullmatch(line)
         candidate = qlib_match.group("message").strip() if qlib_match else line
-        if _TRAINING_LOG_SUMMARY_RE.fullmatch(candidate):
+        if any(pattern.fullmatch(candidate) for pattern in _TRAINING_LOG_SUMMARY_PATTERNS):
             matches.append(candidate)
     return "\n".join(matches)
 

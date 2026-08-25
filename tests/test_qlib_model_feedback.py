@@ -254,6 +254,7 @@ def test_model_feedback_renders_full_evidence_with_sota(monkeypatch) -> None:
     assert "ICIR: Current=0.240000, SOTA=0.120000, Delta=+0.120000" in user_prompt
     assert "1day.excess_return_with_cost.information_ratio" in user_prompt
     assert "Annualized return cost drag" in user_prompt
+    assert "Training Log: training log" in user_prompt
     assert "Do not claim that turnover" in system_prompt
 
 

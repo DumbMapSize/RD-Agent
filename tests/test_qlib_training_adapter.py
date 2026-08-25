@@ -7,9 +7,10 @@ import pandas as pd
 import pytest
 import torch
 import yaml
-from qlib.workflow.cli import render_template
 from qlib.contrib.model.pytorch_general_nn import GeneralPTNN as QlibGeneralPTNN
+from qlib.data.dataset.weight import Reweighter
 from qlib.utils import init_instance_by_config
+from qlib.workflow.cli import render_template
 from torch import nn, optim
 
 from rdagent.scenarios.qlib.experiment.model_training import (
@@ -18,6 +19,7 @@ from rdagent.scenarios.qlib.experiment.model_training import (
     normalize_training_hyperparameters,
 )
 from rdagent.scenarios.qlib.experiment.rdagent_general_ptnn import GeneralPTNN
+from rdagent.scenarios.qlib.experiment.workspace import _extract_training_log_summary
 
 
 class TabularModel(nn.Module):
@@ -86,6 +88,25 @@ class BatchNormTabularModel(nn.Module):
 
     def forward(self, features):
         return self.projection(self.normalization(features))
+
+
+class CountingEvalModel(TabularModel):
+    def __init__(self, num_features: int):
+        super().__init__(num_features)
+        self.forward_calls = 0
+
+    def forward(self, features):
+        self.forward_calls += 1
+        return super().forward(features)
+
+
+class RecordingReweighter(Reweighter):
+    def __init__(self):
+        self.sample_counts = []
+
+    def reweight(self, data):
+        self.sample_counts.append(len(data))
+        return np.ones(len(data))
 
 
 def _trainer(model_cls=TabularModel, **kwargs) -> GeneralPTNN:
@@ -750,6 +771,83 @@ def test_date_pointwise_sam_accepts_numpy_float64_weights_on_both_passes() -> No
     assert not torch.equal(before, trainer.dnn_model.projection.weight)
 
 
+def test_sample_evaluation_weights_partial_batch_by_finite_sample_count() -> None:
+    trainer = _trainer(batch_size=4, train_drop_last=False, scheduler="none")
+    with torch.no_grad():
+        for parameter in trainer.dnn_model.parameters():
+            parameter.zero_()
+    frame = pd.DataFrame(np.column_stack([np.zeros((5, 3)), [0.0, 0.0, 0.0, 0.0, 10.0]]))
+    loader, _ = trainer.build_data_loader(frame, np.ones(len(frame)), train=False)
+
+    loss, score = trainer._evaluate_loader(loader)
+
+    assert loss == pytest.approx(20.0)
+    assert score == pytest.approx(20.0)
+
+
+def test_date_evaluation_keeps_equal_date_weighting() -> None:
+    trainer = _trainer(
+        batch_mode="date",
+        train_drop_last=False,
+        checkpoint_metric="loss",
+        scheduler="none",
+    )
+    with torch.no_grad():
+        for parameter in trainer.dnn_model.parameters():
+            parameter.zero_()
+    index = pd.MultiIndex.from_arrays(
+        [
+            [pd.Timestamp("2026-01-05")] * 4 + [pd.Timestamp("2026-01-06")],
+            [f"SH60000{i}" for i in range(5)],
+        ],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame(
+        np.column_stack([np.zeros((5, 3)), [0.0, 0.0, 0.0, 0.0, 10.0]]),
+        index=index,
+    )
+    loader, _ = trainer.build_data_loader(frame, np.ones(len(frame)), train=False)
+
+    loss, score = trainer._evaluate_loader(loader)
+
+    assert loss == pytest.approx(50.0)
+    assert score == pytest.approx(50.0)
+
+
+def test_default_sample_fit_keeps_partial_validation_batch(tmp_path) -> None:
+    dataset = FrameDataset()
+    dataset.frames["train"] = pd.concat([dataset.frames["train"]] * 3)
+    trainer = _trainer(batch_size=32, n_epochs=1, early_stop=1, scheduler="none")
+    evals_result = {}
+    save_path = tmp_path / "sample-checkpoint.pt"
+
+    trainer.fit(dataset, evals_result=evals_result, save_path=save_path)
+
+    assert np.isfinite(evals_result["valid"][0])
+    assert trainer.fitted is True
+    assert save_path.exists()
+
+
+def test_default_sample_fit_rejects_empty_training_loader(tmp_path) -> None:
+    trainer = _trainer(batch_size=32, n_epochs=1, early_stop=1, scheduler="none")
+    save_path = tmp_path / "empty-training-checkpoint.pt"
+
+    with pytest.raises(ValueError, match="data loader produced no batches"):
+        trainer.fit(FrameDataset(), save_path=save_path)
+
+    assert trainer.fitted is False
+    assert not save_path.exists()
+
+
+def test_unified_fit_preserves_qlib_reweighter_support(tmp_path) -> None:
+    trainer = _trainer(batch_size=8, n_epochs=1, early_stop=1, scheduler="none")
+    reweighter = RecordingReweighter()
+
+    trainer.fit(FrameDataset(), save_path=tmp_path / "reweighted.pt", reweighter=reweighter)
+
+    assert reweighter.sample_counts == [16, 16]
+
+
 @pytest.mark.parametrize(
     ("loss", "trainer_kwargs"),
     [
@@ -796,7 +894,7 @@ def test_adapter_rejects_nonfinite_loss_from_finite_inputs() -> None:
         trainer.loss_fn(prediction, label)
 
 
-def test_custom_fit_rejects_run_without_finite_checkpoint_metric(tmp_path) -> None:
+def test_custom_fit_rejects_run_without_finite_checkpoint_metric(monkeypatch, tmp_path) -> None:
     trainer = _trainer(
         loss="mse",
         batch_mode="date",
@@ -809,12 +907,130 @@ def test_custom_fit_rejects_run_without_finite_checkpoint_metric(tmp_path) -> No
     dataset = FrameDataset()
     dataset.frames["valid"].loc[:, ("label", "LABEL0")] = 1.0
     save_path = tmp_path / "invalid-checkpoint.pt"
+    messages = []
+
+    def capture(message, *args):
+        messages.append(message % args if args else message)
+
+    monkeypatch.setattr(trainer.logger, "info", capture)
 
     with pytest.raises(ValueError, match="No finite validation rank_ic checkpoint"):
         trainer.fit(dataset, save_path=save_path)
 
     assert trainer.fitted is False
     assert not save_path.exists()
+    assert any("valid_rank_ic=unavailable" in message for message in messages)
+
+
+@pytest.mark.parametrize(
+    ("metric", "label", "direction"),
+    [
+        ("loss", "loss", "minimize"),
+        ("ic", "ic", "maximize"),
+        ("rank_ic", "rank_ic", "maximize"),
+        ("icir", "icir", "maximize"),
+        ("topk_precision", "topk_precision@17", "maximize"),
+    ],
+)
+def test_checkpoint_log_metadata_names_metric_and_direction(metric, label, direction) -> None:
+    kwargs = {"checkpoint_metric": metric, "checkpoint_topk": 17}
+    if metric != "loss":
+        kwargs.update({"batch_mode": "date", "train_drop_last": False})
+    trainer = _trainer(**kwargs)
+
+    assert trainer._checkpoint_label() == label
+    assert trainer._checkpoint_direction() == direction
+
+
+@pytest.mark.parametrize("loss", ["mse", "ordinal"])
+def test_evaluation_reuses_one_forward_for_loss_and_checkpoint(loss) -> None:
+    trainer = _trainer(
+        CountingEvalModel,
+        loss=loss,
+        ordinal_num_bins=4,
+        batch_mode="date",
+        train_shuffle=False,
+        train_drop_last=False,
+        checkpoint_metric="rank_ic",
+        scheduler="none",
+    )
+    dataset = FrameDataset()
+    if loss == "ordinal":
+        trainer.prepare_training_data(dataset.frames["train"])
+        counted_model = trainer.dnn_model.base_model
+    else:
+        counted_model = trainer.dnn_model
+    loader, _ = trainer.build_data_loader(dataset.frames["valid"], np.ones(len(dataset.frames["valid"])), train=False)
+    counted_model.forward_calls = 0
+
+    trainer._evaluate_loader(loader)
+
+    assert counted_model.forward_calls == len(loader)
+
+
+def test_custom_fit_logs_loss_checkpoint_context_and_early_stop(monkeypatch, tmp_path) -> None:
+    trainer = _trainer(
+        loss="mse",
+        batch_mode="date",
+        train_shuffle=False,
+        train_drop_last=False,
+        checkpoint_metric="topk_precision",
+        checkpoint_topk=20,
+        n_epochs=3,
+        early_stop=1,
+        scheduler="none",
+    )
+    messages = []
+
+    def capture(message, *args):
+        messages.append(message % args if args else message)
+
+    monkeypatch.setattr(trainer.logger, "info", capture)
+    monkeypatch.setattr(trainer, "build_data_loader", lambda data, weights, train: ([object()], None))
+    monkeypatch.setattr(trainer, "train_epoch", lambda _loader: None)
+    evaluations = iter([(0.9, 0.10), (1.0, 0.20), (0.8, 0.11), (1.1, 0.19)])
+    monkeypatch.setattr(trainer, "_evaluate_loader", lambda _loader: next(evaluations))
+
+    trainer.fit(FrameDataset(), save_path=tmp_path / "checkpoint.pt")
+
+    assert messages == [
+        "RD-Agent training context (authoritative): optimizer=adam; loss=mse; batch_mode=date; "
+        "checkpoint=topk_precision@20; direction=maximize; scheduler=none; scheduler_monitor=none; "
+        "epochs=3; early_stop_patience=1",
+        "training...",
+        "Epoch0: train_loss=0.900000; valid_loss=1.000000; "
+        "train_topk_precision@20=0.100000; valid_topk_precision@20=0.200000; lr=0.001",
+        "Epoch1: train_loss=0.800000; valid_loss=1.100000; "
+        "train_topk_precision@20=0.110000; valid_topk_precision@20=0.190000; lr=0.001",
+        "early stop: checkpoint=topk_precision@20; patience=1; epoch=1",
+        "best checkpoint: metric=topk_precision@20; direction=maximize; value=0.200000; epoch=0",
+    ]
+    assert _extract_training_log_summary("\n".join(messages)) == "\n".join(
+        message for message in messages if message != "training..."
+    )
+
+
+def test_non_loss_checkpoint_plateau_scheduler_monitors_validation_loss(monkeypatch, tmp_path) -> None:
+    trainer = _trainer(
+        loss="mse",
+        batch_mode="date",
+        train_drop_last=False,
+        checkpoint_metric="rank_ic",
+        n_epochs=1,
+        early_stop=1,
+        scheduler="plateau",
+    )
+    scheduler_values = []
+    monkeypatch.setattr(trainer.logger, "info", lambda *_args: None)
+    monkeypatch.setattr(trainer, "build_data_loader", lambda data, weights, train: ([object()], None))
+    monkeypatch.setattr(trainer, "train_epoch", lambda _loader: None)
+    evaluations = iter([(0.8, 0.10), (1.7, 0.25)])
+    monkeypatch.setattr(trainer, "_evaluate_loader", lambda _loader: next(evaluations))
+    monkeypatch.setattr(trainer.lr_scheduler, "step", scheduler_values.append)
+
+    trainer.fit(FrameDataset(), save_path=tmp_path / "checkpoint.pt")
+
+    assert scheduler_values == [1.7]
 
 
 def test_model_prompt_explains_that_date_batches_ignore_batch_size() -> None:
@@ -824,7 +1040,7 @@ def test_model_prompt_explains_that_date_batches_ignore_batch_size() -> None:
 
     specification = prompts["model_hypothesis_specification"]
     assert "each batch is one complete trading-date cross-section" in specification
-    assert "`batch_size` applies only to sample mode" in specification
+    assert "`batch_size` has no effect" in specification
 
 
 def test_date_ranking_fit_and_predict_complete_with_scalar_signal(tmp_path) -> None:

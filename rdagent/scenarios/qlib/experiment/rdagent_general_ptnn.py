@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 from qlib.contrib.model.pytorch_general_nn import GeneralPTNN as QlibGeneralPTNN
 from qlib.data.dataset.handler import DataHandlerLP
+from qlib.data.dataset.weight import Reweighter
 from qlib.model.utils import ConcatDataset
 from qlib.utils import get_or_create_path
 from torch import nn, optim
@@ -86,9 +87,12 @@ class _OrdinalScoreModel(nn.Module):
     def ordinal_logits(self, location: torch.Tensor) -> torch.Tensor:
         return location - self.cutpoints().view(1, -1)
 
-    def forward(self, features: torch.Tensor) -> torch.Tensor:
-        probabilities_above = torch.sigmoid(self.ordinal_logits(self.location(features)))
+    def score_from_location(self, location: torch.Tensor) -> torch.Tensor:
+        probabilities_above = torch.sigmoid(self.ordinal_logits(location))
         return probabilities_above.sum(dim=1, keepdim=True) / float(self.num_bins - 1)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        return self.score_from_location(self.location(features))
 
 
 class GeneralPTNN(QlibGeneralPTNN):
@@ -554,13 +558,15 @@ class GeneralPTNN(QlibGeneralPTNN):
     def _evaluate_loader(self, data_loader) -> tuple[float, float]:
         self.dnn_model.eval()
         losses = []
+        loss_weights = []
         daily_values = []
         for data, weight in data_loader:
             feature, label = self._get_fl(data)
             with torch.no_grad():
                 pred = self._forward_for_loss(feature)
-                losses.append(self.loss_fn(pred, label, weight.to(self.device)).item())
-                prediction = self.dnn_model(feature.float()).detach().cpu().numpy().reshape(-1)
+                batch_loss = self.loss_fn(pred, label, weight.to(self.device)).item()
+                score = self.dnn_model.score_from_location(pred) if self.loss == "ordinal" else pred
+                prediction = score.detach().cpu().numpy().reshape(-1)
             target = label.detach().cpu().numpy().reshape(-1)
             if prediction.size != target.size:
                 raise ValueError("prediction and label sizes do not match during evaluation")
@@ -569,6 +575,8 @@ class GeneralPTNN(QlibGeneralPTNN):
             target = target[finite_target]
             if not np.isfinite(prediction).all():
                 raise FloatingPointError("non-finite prediction for a finite label during evaluation")
+            losses.append(batch_loss)
+            loss_weights.append(1.0 if self.batch_mode == "date" else float(target.size))
             if self.checkpoint_metric == "ic":
                 daily_values.append(self._correlation(prediction, target, rank=False))
             elif self.checkpoint_metric == "rank_ic":
@@ -584,7 +592,9 @@ class GeneralPTNN(QlibGeneralPTNN):
                 target_top = set(np.argpartition(target, -count)[-count:])
                 daily_values.append(len(predicted_top & target_top) / count)
 
-        mean_loss = float(np.mean(losses))
+        if not losses:
+            raise ValueError("evaluation data loader produced no batches")
+        mean_loss = float(np.average(losses, weights=loss_weights))
         if self.checkpoint_metric == "loss":
             return mean_loss, mean_loss
         finite_values = np.asarray(daily_values, dtype=float)
@@ -596,32 +606,53 @@ class GeneralPTNN(QlibGeneralPTNN):
             return mean_loss, float(np.mean(finite_values) / std) if std > 0.0 else float("-inf")
         return mean_loss, float(np.mean(finite_values))
 
-    def _uses_custom_fit(self) -> bool:
-        return (
-            self.batch_mode == "date"
-            or not self.train_shuffle
-            or not self.train_drop_last
-            or self.checkpoint_metric != "loss"
-        )
+    def _checkpoint_label(self) -> str:
+        if self.checkpoint_metric == "topk_precision":
+            return f"topk_precision@{self.checkpoint_topk}"
+        return self.checkpoint_metric
+
+    def _checkpoint_direction(self) -> str:
+        return "minimize" if self.checkpoint_metric == "loss" else "maximize"
+
+    @staticmethod
+    def _format_training_value(value: float) -> str:
+        return f"{value:.6f}" if np.isfinite(value) else "unavailable"
 
     def fit(self, dataset, evals_result=None, save_path=None, reweighter=None):
         if evals_result is None:
             evals_result = {}
-        if not self._uses_custom_fit():
-            if self.loss == "ordinal":
-                train_data = dataset.prepare("train", col_set=["feature", "label"], data_key=DataHandlerLP.DK_L)
-                self.prepare_training_data(train_data)
-            return super().fit(dataset, evals_result=evals_result, save_path=save_path, reweighter=reweighter)
-        if reweighter is not None:
-            raise ValueError("custom data-loader modes do not support QLib reweighters")
-
+        checkpoint_label = self._checkpoint_label()
+        checkpoint_direction = self._checkpoint_direction()
+        scheduler_monitor = "valid_loss" if self.scheduler == "plateau" else "none"
+        self.logger.info(
+            "RD-Agent training context (authoritative): optimizer=%s; loss=%s; batch_mode=%s; "
+            "checkpoint=%s; direction=%s; scheduler=%s; scheduler_monitor=%s; epochs=%d; "
+            "early_stop_patience=%d",
+            self.optimizer,
+            self.loss,
+            self.batch_mode,
+            checkpoint_label,
+            checkpoint_direction,
+            self.scheduler,
+            scheduler_monitor,
+            self.n_epochs,
+            self.early_stop,
+        )
         train_data = dataset.prepare("train", col_set=["feature", "label"], data_key=DataHandlerLP.DK_L)
         valid_data = dataset.prepare("valid", col_set=["feature", "label"], data_key=DataHandlerLP.DK_L)
         if train_data.empty or valid_data.empty:
             raise ValueError("Empty data from dataset, please check your dataset config.")
+        if reweighter is None:
+            train_weights = np.ones(len(train_data))
+            valid_weights = np.ones(len(valid_data))
+        elif isinstance(reweighter, Reweighter):
+            train_weights = reweighter.reweight(train_data)
+            valid_weights = reweighter.reweight(valid_data)
+        else:
+            raise ValueError("Unsupported reweighter type.")
         self.prepare_training_data(train_data)
-        train_loader, _ = self.build_data_loader(train_data, np.ones(len(train_data)), train=True)
-        valid_loader, _ = self.build_data_loader(valid_data, np.ones(len(valid_data)), train=False)
+        train_loader, _ = self.build_data_loader(train_data, train_weights, train=True)
+        valid_loader, _ = self.build_data_loader(valid_data, valid_weights, train=False)
 
         save_path = get_or_create_path(save_path)
         evals_result["train"] = []
@@ -636,7 +667,27 @@ class GeneralPTNN(QlibGeneralPTNN):
             self.train_epoch(train_loader)
             train_loss, train_score = self._evaluate_loader(train_loader)
             valid_loss, valid_score = self._evaluate_loader(valid_loader)
-            self.logger.info("Epoch%d: train %.6f, valid %.6f" % (step, train_score, valid_score))
+            learning_rate = float(self.train_optimizer.param_groups[0]["lr"])
+            if self.checkpoint_metric == "loss":
+                self.logger.info(
+                    "Epoch%d: train_loss=%s; valid_loss=%s; lr=%.6g",
+                    step,
+                    self._format_training_value(train_loss),
+                    self._format_training_value(valid_loss),
+                    learning_rate,
+                )
+            else:
+                self.logger.info(
+                    "Epoch%d: train_loss=%s; valid_loss=%s; train_%s=%s; valid_%s=%s; lr=%.6g",
+                    step,
+                    self._format_training_value(train_loss),
+                    self._format_training_value(valid_loss),
+                    checkpoint_label,
+                    self._format_training_value(train_score),
+                    checkpoint_label,
+                    self._format_training_value(valid_score),
+                    learning_rate,
+                )
             evals_result["train"].append(train_score)
             evals_result["valid"].append(valid_score)
             self.lr_scheduler.step(valid_loss)
@@ -652,11 +703,22 @@ class GeneralPTNN(QlibGeneralPTNN):
             else:
                 stop_steps += 1
                 if stop_steps >= self.early_stop:
-                    self.logger.info("early stop")
+                    self.logger.info(
+                        "early stop: checkpoint=%s; patience=%d; epoch=%d",
+                        checkpoint_label,
+                        self.early_stop,
+                        step,
+                    )
                     break
         if best_param is None or best_epoch is None:
             raise ValueError(f"No finite validation {self.checkpoint_metric} checkpoint was produced")
-        self.logger.info("best score: %.6f @ %d epoch" % (best_score, best_epoch))
+        self.logger.info(
+            "best checkpoint: metric=%s; direction=%s; value=%.6f; epoch=%d",
+            checkpoint_label,
+            checkpoint_direction,
+            best_score,
+            best_epoch,
+        )
         self.dnn_model.load_state_dict(best_param)
         torch.save(best_param, save_path)
         self.fitted = True

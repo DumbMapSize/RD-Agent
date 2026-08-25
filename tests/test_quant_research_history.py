@@ -161,7 +161,7 @@ def test_quant_experiment_generation_uses_research_history():
     assert "factor-marker" in factor_context["hypothesis_and_feedback"]
     assert "repeated-model-hypothesis-marker" not in model_context["hypothesis_and_feedback"]
     assert "architecture-marker" in model_context["hypothesis_and_feedback"]
-    assert "must use the schema shown below" in model_context["experiment_output_format"]
+    assert "sole executable source" in model_context["experiment_output_format"]
     assert "n_epochs" in model_context["experiment_output_format"]
     assert "optimizer" in model_context["experiment_output_format"]
     assert "time_series_lookback" in model_context["experiment_output_format"]
@@ -194,8 +194,8 @@ def test_quant_hypothesis_generation_uses_research_history(monkeypatch):
     assert "repeated-model-hypothesis-marker" not in context["hypothesis_and_feedback"]
     assert "architecture-marker" in context["hypothesis_and_feedback"]
     assert "repeated-model-hypothesis-marker" in context["last_hypothesis_and_feedback"]
-    assert "supported training interface" in context["hypothesis_specification"]
-    assert "AdamW" in context["hypothesis_specification"]
+    assert "supported root fields" in context["hypothesis_specification"]
+    assert "`adamw`" in context["hypothesis_specification"]
     assert "do not propose or claim any other training-loop behavior" in context["hypothesis_specification"].lower()
 
 

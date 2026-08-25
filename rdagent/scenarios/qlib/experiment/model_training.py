@@ -415,6 +415,70 @@ def normalize_training_hyperparameters(
     return normalized
 
 
+def _require_generated_fields(config: Mapping[str, Any], required: set[str], field: str = "") -> None:
+    missing = sorted(required - set(config))
+    if not missing:
+        return
+    path = f"training_hyperparameters.{field}" if field else "training_hyperparameters"
+    raise ValueError(f"Generated {path} must explicitly provide: {', '.join(missing)}")
+
+
+def normalize_generated_training_hyperparameters(
+    value: Mapping[str, Any] | None,
+    model_type: str,
+) -> dict[str, Any]:
+    """Validate an LLM-generated training contract before applying runtime defaults."""
+    if not isinstance(value, Mapping):
+        raise ValueError("Generated training_hyperparameters must be a mapping")
+    raw = dict(value)
+    required_root = _CORE_KEYS | (_STRUCTURED_KEYS - {"time_series_lookback"})
+    _require_generated_fields(raw, required_root)
+
+    nested_fields = {
+        "optimizer": {"name"},
+        "loss": {"name"},
+        "sam": {"enabled"},
+        "data_loader": {"batch_mode", "shuffle", "drop_last"},
+        "checkpoint": {"metric"},
+        "gradient_clip": {"mode"},
+        "scheduler": {"name"},
+    }
+    nested = {}
+    for field, required in nested_fields.items():
+        nested[field] = _as_mapping(raw[field], field)
+        _require_generated_fields(nested[field], required, field)
+
+    normalized = normalize_training_hyperparameters(raw, model_type)
+    if normalized["optimizer"]["name"] == "sgd":
+        _require_generated_fields(nested["optimizer"], {"momentum"}, "optimizer")
+
+    loss_name = normalized["loss"]["name"]
+    loss_fields = {
+        "huber": {"huber_delta"},
+        "pairwise": {"temperature"},
+        "listnet": {"temperature"},
+        "tail_listnet": {"temperature", "tail_fraction", "top_weight", "bottom_weight"},
+        "ordinal": {"num_bins"},
+    }
+    _require_generated_fields(nested["loss"], loss_fields.get(loss_name, set()), "loss")
+
+    if normalized["sam"]["enabled"]:
+        _require_generated_fields(nested["sam"], {"rho", "adaptive"}, "sam")
+    if normalized["checkpoint"]["metric"] == "topk_precision":
+        _require_generated_fields(nested["checkpoint"], {"topk"}, "checkpoint")
+    if normalized["gradient_clip"]["mode"] != "none":
+        _require_generated_fields(nested["gradient_clip"], {"threshold"}, "gradient_clip")
+    if normalized["scheduler"]["name"] == "plateau":
+        _require_generated_fields(
+            nested["scheduler"],
+            {"factor", "patience", "min_lr", "threshold"},
+            "scheduler",
+        )
+    if normalize_model_type(model_type) == "TimeSeries":
+        _require_generated_fields(raw, {"time_series_lookback"})
+    return normalized
+
+
 def build_model_run_env(
     training_hyperparameters: Mapping[str, Any] | None,
     model_type: str,

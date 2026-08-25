@@ -5,7 +5,10 @@ from rdagent.components.coder.model_coder.model import ModelExperiment, ModelTas
 from rdagent.components.proposal import ModelHypothesis2Experiment, ModelHypothesisGen
 from rdagent.core.proposal import Hypothesis, Scenario, Trace
 from rdagent.scenarios.qlib.experiment.model_experiment import QlibModelExperiment
-from rdagent.scenarios.qlib.experiment.model_training import normalize_model_type, normalize_training_hyperparameters
+from rdagent.scenarios.qlib.experiment.model_training import (
+    normalize_generated_training_hyperparameters,
+    normalize_model_type,
+)
 from rdagent.scenarios.qlib.experiment.quant_experiment import QlibQuantScenario
 from rdagent.utils.agent.tpl import T
 
@@ -145,7 +148,10 @@ class QlibModelHypothesis2Experiment(ModelHypothesis2Experiment):
             hyperparameters = response_dict[model_name]["hyperparameters"]
             training_hyperparameters = response_dict[model_name]["training_hyperparameters"]
             model_type = normalize_model_type(response_dict[model_name]["model_type"])
-            training_hyperparameters = normalize_training_hyperparameters(training_hyperparameters, model_type)
+            training_hyperparameters = normalize_generated_training_hyperparameters(
+                training_hyperparameters,
+                model_type,
+            )
             tasks.append(
                 ModelTask(
                     name=model_name,

@@ -127,11 +127,11 @@ model_hypothesis_specification: |-
   2. Second, `last_hypothesis_and_feedback` and `sota_hypothesis_and_feedback` are key references you should pay close attention to. You can choose to optimize based on either of them or generate new ideas to form hypotheses and experiments.
   3. If there is no prior experiment or result available at the beginning, you can start by implementing a simple and small architecture.
   4. If a series of attempts fail to achieve SOTA, consider exploring entirely new directions; at this point, it is acceptable to return to simple architectures.
-  5. Focus primarily on the architecture of PyTorch models. Each hypothesis should specifically address architectural decisions, such as layer configurations, activation functions, regularization methods, and overall model structure. DO NOT do any feature-specific processing. Instead, you can propose innovative transformations on the input time-series data to enhance model training effectiveness.
-  6. Avoid including input features or training-loop changes outside the supported `training_hyperparameters` interface.
-  7. Sometimes, when training performance is poor, adjusting hyperparameters can also be an effective strategy for improvement.
-  8. The supported training interface contains `n_epochs`, `lr`, `early_stop`, `batch_size`, `weight_decay`, `optimizer`, `loss`, `sam`, `data_loader`, `checkpoint`, `gradient_clip`, and `scheduler`. A TimeSeries model can additionally control `time_series_lookback`.
-  9. `optimizer.name` supports Adam, AdamW, or SGD; only SGD can use `optimizer.momentum`. `sam` can enable sharpness-aware updates with `enabled`, `rho`, and `adaptive`. `loss.name` supports `mse`, `mae`, `huber`, `pairwise`, `listnet`, `tail_listnet`, or `ordinal`; ranking losses can use `temperature`, `tail_listnet` can additionally use `tail_fraction`, `top_weight`, and `bottom_weight`, and `ordinal` can use `num_bins`. Pairwise/ListNet losses require `data_loader.batch_mode: date` and `drop_last: false`; `shuffle` controls date order without splitting a date's cross-section. In date mode, each batch is one complete trading-date cross-section, so `batch_size` applies only to sample mode and must not be described as an effective date-mode hyperparameter. Ordinal loss keeps the generated model output scalar and derives label bins from the training fold. `checkpoint.metric` supports `loss`, `ic`, `rank_ic`, `icir`, or `topk_precision`, with `topk` configuring the last metric; non-loss metrics require date batches. `gradient_clip.mode` supports value, norm, or none. `scheduler.name` supports plateau or none. Do not propose or claim any other training-loop behavior.
+  5. A hypothesis may change the PyTorch architecture, the supported training configuration, or both. State every proposed change precisely enough for the next stage to produce one executable experiment, and do not propose feature-specific preprocessing or new input features.
+  6. Architecture changes include layer structure, activation, model-internal normalization or dropout, regularization implemented inside `model.py`, and transformations of the supplied tabular or time-series tensor. Training-loop behavior is separate and must use only the supported `training_hyperparameters` paths below.
+  7. When proposing training changes, use the canonical paths and state the exact active values. The supported root fields are `n_epochs`, `lr`, `early_stop`, `batch_size`, `weight_decay`, `optimizer`, `loss`, `sam`, `data_loader`, `checkpoint`, `gradient_clip`, and `scheduler`; a TimeSeries model additionally uses `time_series_lookback`.
+  8. `optimizer.name` supports `adam`, `adamw`, or `sgd`; only SGD uses `optimizer.momentum`. `loss.name` supports `mse`, `mae`, `huber`, `pairwise`, `listnet`, `tail_listnet`, or `ordinal`. Huber uses `huber_delta`; pairwise and ListNet losses use `temperature`; `tail_listnet` also uses `tail_fraction`, `top_weight`, and `bottom_weight`; ordinal uses `num_bins`.
+  9. Pairwise/ListNet losses require `data_loader.batch_mode: date` and `drop_last: false`. In date mode, each batch is one complete trading-date cross-section, `shuffle` controls date order, and `batch_size` has no effect. `sam` uses `enabled`, `rho`, and `adaptive`. `checkpoint.metric` supports `loss`, `ic`, `rank_ic`, `icir`, or `topk_precision`; `topk_precision` also uses `topk`, and every non-loss metric requires date batches. `gradient_clip.mode` supports `value`, `norm`, or `none`. `scheduler.name` supports `plateau` or `none`. Ordinal loss keeps the model output scalar and derives label bins from the training fold. Do not propose or claim any other training-loop behavior.
   10. Use standard libraries for baseline models, but also explore custom architecture designs to investigate novel structures. After sufficient trials with traditional models, aim for innovation comparable to top-tier AI conferences (NeurIPS, ICLR, ICML, SIGKDD, etc.) in time series modeling.
 
 factor_hypothesis_specification: |-
@@ -176,11 +176,19 @@ factor_experiment_output_format: |-
   }
 
 model_experiment_output_format: |-
-  So far please only design one model to test the hypothesis! 
-  The output should follow JSON format. The schema is as follows (value in training_hyperparameters is a basic setting for reference, you CAN CHANGE depends on the previous training log): 
-  The `training_hyperparameters` object must use the schema shown below; do not add any other fields. For a TimeSeries model, add `"time_series_lookback": 20` (or another positive integer); omit that field for a Tabular model.
+  Design exactly one model task that executes the current target hypothesis.
+
+  Translation rules:
+  1. The current target hypothesis is authoritative. Copy every training choice stated there into `training_hyperparameters` with the same value; do not replace it with an example value or a setting from an earlier trial.
+  2. `hyperparameters` is only for architecture and `model.py` behavior. `training_hyperparameters` is the sole executable source for optimizer, loss, data loading, checkpoint selection, and every other supported training-loop setting. Do not duplicate training settings in `hyperparameters`.
+  3. `training_hyperparameters` must explicitly contain `n_epochs`, `lr`, `early_stop`, `batch_size`, `weight_decay`, `optimizer`, `loss`, `sam`, `data_loader`, `checkpoint`, `gradient_clip`, and `scheduler`. Use only these fields and the conditional fields described below.
+  4. Specify every active conditional value: SGD requires `optimizer.momentum`; Huber requires `loss.huber_delta`; pairwise and ListNet losses require `loss.temperature`; `tail_listnet` additionally requires `loss.tail_fraction`, `loss.top_weight`, and `loss.bottom_weight`; ordinal requires `loss.num_bins`; enabled SAM requires `sam.rho` and `sam.adaptive`; `topk_precision` requires `checkpoint.topk`; active gradient clipping requires `gradient_clip.threshold`; and the plateau scheduler requires `factor`, `patience`, `min_lr`, and `threshold`.
+  5. Pairwise/ListNet losses and non-loss checkpoint metrics require `data_loader.batch_mode` to be `date` and `drop_last` to be false. In date mode, `batch_size` is retained as part of the common schema but has no training effect.
+  6. A TimeSeries model must add `time_series_lookback` as a positive integer inside `training_hyperparameters`; a Tabular model must omit it.
+  7. Return valid JSON without comments, trailing commas, ellipses, or filler text. The values below illustrate the required structure only; choose values that implement the current hypothesis.
+
   {
-    "model_name (The name of the model)": {
+    "model_name": {
         "description": "A detailed description of the model",
         "formulation": "A LaTeX formula representing the model's formulation",
         "architecture": "A detailed description of the model's architecture, e.g., neural network layers or tree structures",
@@ -190,26 +198,24 @@ model_experiment_output_format: |-
             "variable_name_3": "Description of variable 3"
         },
         "hyperparameters": {
-            "hyperparameter_name_1": "value of hyperparameter 1",
-            "hyperparameter_name_2": "value of hyperparameter 2",
-            "hyperparameter_name_3": "value of hyperparameter 3"
+            "architecture_parameter_name": "value used by model.py"
         },
-        "training_hyperparameters" {  # All values are for reference; you can set them yourself
-            "n_epochs": "100",
-            "lr": "1e-3",
+        "training_hyperparameters": {
+            "n_epochs": 100,
+            "lr": 0.001,
             "early_stop": 10,
             "batch_size": 256,
-            "weight_decay": 1e-4,
-            "optimizer": {"name": "adam", "momentum": 0.0},
-            "loss": {"name": "mse", "huber_delta": 1.0},
-            "sam": {"enabled": false, "rho": 0.05, "adaptive": false},
+            "weight_decay": 0.0001,
+            "optimizer": {"name": "adam"},
+            "loss": {"name": "mse"},
+            "sam": {"enabled": false},
             "data_loader": {"batch_mode": "sample", "shuffle": true, "drop_last": true},
-            "checkpoint": {"metric": "loss", "topk": 20},
+            "checkpoint": {"metric": "loss"},
             "gradient_clip": {"mode": "value", "threshold": 3.0},
-            "scheduler": {"name": "plateau", "factor": 0.5, "patience": 5, "min_lr": 1e-6, "threshold": 1e-5},
+            "scheduler": {"name": "none"}
         },
-        "model_type": "Tabular or TimeSeries"  # Should be one of "Tabular" or "TimeSeries"
-    },
+        "model_type": "Tabular"
+    }
   }
 
 factor_feedback_generation:

@@ -57,3 +57,33 @@ def test_extract_training_log_summary_accepts_scientific_notation() -> None:
     qlib_log = "Epoch12: train 1.2e-03, valid +4.5E-02"
 
     assert _extract_training_log_summary(qlib_log) == qlib_log
+
+
+def test_extract_training_log_summary_preserves_structured_checkpoint_evidence() -> None:
+    expected = [
+        "RD-Agent training context (authoritative): optimizer=adamw; loss=mse; batch_mode=date; "
+        "checkpoint=topk_precision@20; direction=maximize; scheduler=plateau; "
+        "scheduler_monitor=valid_loss; epochs=6; early_stop_patience=2",
+        "Epoch0: train_loss=0.001200; valid_loss=0.001300; "
+        "train_topk_precision@20=0.095489; valid_topk_precision@20=0.085744; lr=0.00015",
+        "Epoch1: train_loss=0.001100; valid_loss=0.001400; "
+        "train_topk_precision@20=unavailable; valid_topk_precision@20=0.088223; lr=7.5e-05",
+        "early stop: checkpoint=topk_precision@20; patience=2; epoch=5",
+        "best checkpoint: metric=topk_precision@20; direction=maximize; value=0.088223; epoch=3",
+    ]
+    qlib_log = "\n".join(
+        f"[16902:MainThread](2026-08-22 17:29:{20 + index:02d},495) INFO - qlib.GeneralPTNN - "
+        f"[rdagent_general_ptnn.py:{610 + index}] - {line}"
+        for index, line in enumerate(expected)
+    )
+
+    assert _extract_training_log_summary(qlib_log) == "\n".join(expected)
+
+
+def test_extract_training_log_summary_rejects_mismatched_structured_checkpoint_metrics() -> None:
+    qlib_log = (
+        "Epoch0: train_loss=0.001200; valid_loss=0.001300; "
+        "train_rank_ic=0.095489; valid_ic=0.085744; lr=0.00015"
+    )
+
+    assert _extract_training_log_summary(qlib_log) == ""
