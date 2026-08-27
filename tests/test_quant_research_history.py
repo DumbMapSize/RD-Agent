@@ -197,6 +197,9 @@ def test_quant_hypothesis_generation_uses_research_history(monkeypatch):
     assert "supported root fields" in context["hypothesis_specification"]
     assert "`adamw`" in context["hypothesis_specification"]
     assert "do not propose or claim any other training-loop behavior" in context["hypothesis_specification"].lower()
+    assert "executes one candidate implementation" in context["hypothesis_specification"]
+    assert "not as current-round requirements or reasons to reject the candidate" in context["hypothesis_specification"]
+    assert "Without matched controls, do not claim causal attribution" in context["hypothesis_specification"]
 
 
 def test_quant_hypothesis_generation_keeps_action_split(monkeypatch):
