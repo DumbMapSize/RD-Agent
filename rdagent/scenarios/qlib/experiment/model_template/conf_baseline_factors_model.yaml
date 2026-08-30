@@ -38,7 +38,10 @@ port_analysis_config: &port_analysis_config
         account: 100000000
         benchmark: *benchmark
         exchange_kwargs:
-            limit_threshold: 0.095
+            # Preserve legacy float-threshold boundaries for float32 QLib fields.
+            limit_threshold:
+                - "$change > $limit_rate"
+                - "$change < 0 - $limit_rate"
             deal_price: open
             open_cost: 0.0005
             close_cost: 0.0015
@@ -109,7 +112,7 @@ task:
           kwargs: 
             ana_long_short: False
             ann_scaler: 252
-        - class: PortAnaRecord
-          module_path: qlib.workflow.record_temp
+        - class: LimitExpressionPortAnaRecord
+          module_path: rdagent.scenarios.qlib.experiment.limit_expression_record
           kwargs: 
             config: *port_analysis_config
