@@ -1,6 +1,7 @@
 import math
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import numpy as np
 import pandas as pd
@@ -8,6 +9,7 @@ import pytest
 import torch
 import yaml
 from qlib.contrib.model.pytorch_general_nn import GeneralPTNN as QlibGeneralPTNN
+from qlib.data.dataset.handler import DataHandlerLP
 from qlib.data.dataset.weight import Reweighter
 from qlib.utils import init_instance_by_config
 from qlib.workflow.cli import render_template
@@ -100,6 +102,32 @@ class CountingEvalModel(TabularModel):
         return super().forward(features)
 
 
+class SchemaAwareTabularModel(nn.Module):
+    required_feature_names = ("KMID",)
+
+    def __init__(self, num_features: int):
+        super().__init__()
+        self.scale = nn.Parameter(torch.ones(1))
+
+    def forward(self, features):
+        kmid_index = self.feature_index["KMID"]
+        return features[:, kmid_index : kmid_index + 1] * self.scale
+
+
+class SchemaAwareTimeSeriesModel(nn.Module):
+    required_feature_names = ("KMID",)
+
+    def __init__(self, num_features: int, num_timesteps: int):
+        super().__init__()
+        self.num_timesteps = num_timesteps
+        self.scale = nn.Parameter(torch.ones(1))
+
+    def forward(self, features):
+        assert features.shape[1] == self.num_timesteps
+        kmid_index = self.feature_index["KMID"]
+        return features[:, -1, kmid_index : kmid_index + 1] * self.scale
+
+
 class RecordingReweighter(Reweighter):
     def __init__(self):
         self.sample_counts = []
@@ -109,8 +137,8 @@ class RecordingReweighter(Reweighter):
         return np.ones(len(data))
 
 
-def _trainer(model_cls=TabularModel, **kwargs) -> GeneralPTNN:
-    model_kwargs = {"num_features": 3}
+def _trainer(model_cls=TabularModel, *, num_features=3, **kwargs) -> GeneralPTNN:
+    model_kwargs = {"num_features": num_features}
     if "TimeSeries" in model_cls.__name__:
         model_kwargs["num_timesteps"] = 4
     return GeneralPTNN(
@@ -155,6 +183,25 @@ class FrameDataset:
         return frame
 
 
+class NamedFrameDataset(FrameDataset):
+    def __init__(self, feature_names, *, test_feature_names=None) -> None:
+        super().__init__()
+        feature_names = tuple(feature_names)
+        test_feature_names = tuple(test_feature_names or feature_names)
+        for segment, frame in self.frames.items():
+            names = test_feature_names if segment == "test" else feature_names
+            feature_values = [frame.iloc[:, position % 3].to_numpy() for position in range(len(names))]
+            label = frame.iloc[:, -1].to_numpy()
+            columns = pd.MultiIndex.from_tuples(
+                [("feature", name) for name in names] + [("label", "LABEL0")]
+            )
+            self.frames[segment] = pd.DataFrame(
+                np.column_stack([*feature_values, label]),
+                index=frame.index,
+                columns=columns,
+            )
+
+
 class PreparedTimeSeriesData:
     def __init__(self) -> None:
         self.index = pd.MultiIndex.from_tuples(
@@ -180,6 +227,25 @@ class PreparedTimeSeriesData:
 
     def config(self, *, fillna_type):
         self.fillna_type = fillna_type
+
+
+class FeatureNameHandler:
+    def __init__(self, feature_names) -> None:
+        self.feature_names = tuple(feature_names)
+
+    def get_cols(self, *, col_set, data_key):
+        assert col_set == "feature"
+        assert data_key in {DataHandlerLP.DK_L, DataHandlerLP.DK_I}
+        return list(self.feature_names)
+
+
+class NamedTimeSeriesDataset:
+    def __init__(self, feature_names) -> None:
+        self.handler = FeatureNameHandler(feature_names)
+        self.prepared = {segment: PreparedTimeSeriesData() for segment in ("train", "valid", "test")}
+
+    def prepare(self, segment, **_kwargs):
+        return self.prepared[segment]
 
 
 def test_training_hyperparameters_default_to_official_general_ptnn_behavior() -> None:
@@ -1064,6 +1130,129 @@ def test_date_ranking_fit_and_predict_complete_with_scalar_signal(tmp_path) -> N
     assert len(prediction) == len(dataset.frames["test"])
     assert prediction.index.equals(dataset.frames["test"].index)
     assert np.isfinite(prediction).all()
+
+
+@pytest.mark.parametrize(
+    ("feature_names", "expected_kmid_index"),
+    [
+        (("ZETA", "KMID", "OMEGA"), 1),
+        (("A_NEW_FACTOR", "ZETA", "KMID", "OMEGA"), 2),
+    ],
+)
+def test_feature_schema_tracks_the_current_dataset_order(
+    tmp_path,
+    feature_names,
+    expected_kmid_index,
+) -> None:
+    trainer = _trainer(
+        SchemaAwareTabularModel,
+        num_features=len(feature_names),
+        batch_size=8,
+        n_epochs=1,
+        early_stop=1,
+        scheduler="none",
+    )
+    dataset = NamedFrameDataset(feature_names)
+
+    trainer.fit(dataset, save_path=tmp_path / "schema.pt")
+    prediction = trainer.predict(dataset)
+
+    assert trainer.feature_names == feature_names
+    assert trainer.dnn_model.feature_index["KMID"] == expected_kmid_index
+    assert np.isfinite(prediction).all()
+
+
+def test_feature_schema_rejects_a_missing_required_feature(tmp_path) -> None:
+    trainer = _trainer(
+        SchemaAwareTabularModel,
+        batch_size=8,
+        n_epochs=1,
+        early_stop=1,
+        scheduler="none",
+    )
+
+    with pytest.raises(ValueError, match="requires unavailable features: KMID"):
+        trainer.fit(
+            NamedFrameDataset(("ALPHA", "BETA", "GAMMA")),
+            save_path=tmp_path / "missing.pt",
+        )
+
+
+def test_feature_schema_rejects_training_inference_order_drift(tmp_path) -> None:
+    trainer = _trainer(
+        SchemaAwareTabularModel,
+        batch_size=8,
+        n_epochs=1,
+        early_stop=1,
+        scheduler="none",
+    )
+    dataset = NamedFrameDataset(
+        ("KMID", "ALPHA", "BETA"),
+        test_feature_names=("ALPHA", "KMID", "BETA"),
+    )
+    trainer.fit(dataset, save_path=tmp_path / "drift.pt")
+
+    with pytest.raises(ValueError, match="changed between model training and inference"):
+        trainer.predict(dataset)
+
+
+def test_feature_schema_reaches_the_base_model_for_ordinal_training(tmp_path) -> None:
+    trainer = _trainer(
+        SchemaAwareTabularModel,
+        loss="ordinal",
+        ordinal_num_bins=4,
+        batch_size=8,
+        n_epochs=1,
+        early_stop=1,
+        scheduler="none",
+    )
+    dataset = NamedFrameDataset(("ALPHA", "KMID", "BETA"))
+
+    trainer.fit(dataset, save_path=tmp_path / "ordinal-schema.pt")
+
+    assert trainer.dnn_model.base_model.feature_index["KMID"] == 1
+
+
+def test_feature_schema_supports_time_series_handler_columns(tmp_path) -> None:
+    trainer = _trainer(
+        SchemaAwareTimeSeriesModel,
+        batch_size=2,
+        n_epochs=1,
+        early_stop=1,
+        scheduler="none",
+    )
+    dataset = NamedTimeSeriesDataset(("ALPHA", "KMID", "BETA"))
+
+    trainer.fit(dataset, save_path=tmp_path / "time-series-schema.pt")
+
+    assert trainer.feature_names == ("ALPHA", "KMID", "BETA")
+    assert trainer.dnn_model.feature_index["KMID"] == 1
+
+
+def test_model_execution_template_binds_required_feature_schema(tmp_path, monkeypatch) -> None:
+    model_module = ModuleType("model")
+    model_module.model_cls = SchemaAwareTabularModel
+    monkeypatch.setitem(sys.modules, "model", model_module)
+    monkeypatch.chdir(tmp_path)
+    namespace = {
+        "MODEL_TYPE": "Tabular",
+        "BATCH_SIZE": 4,
+        "NUM_FEATURES": 3,
+        "NUM_TIMESTEPS": 4,
+        "NUM_EDGES": 8,
+        "INPUT_VALUE": 1.0,
+        "PARAM_INIT_VALUE": 0.5,
+    }
+    template_path = (
+        Path(__file__).parents[1]
+        / "rdagent/components/coder/model_coder/model_execute_template_v1.txt"
+    )
+
+    exec(compile(template_path.read_text(), str(template_path), "exec"), namespace)
+
+    assert namespace["m"].feature_index["KMID"] == 0
+    assert namespace["execution_model_output"].shape == (4, 1)
+    assert np.isfinite(namespace["execution_model_output"]).all()
 
 
 def test_ordinal_fit_and_predict_complete_with_training_fold_bins(tmp_path) -> None:

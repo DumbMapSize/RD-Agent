@@ -227,6 +227,7 @@ class GeneralPTNN(QlibGeneralPTNN):
         self.tail_bottom_weight = float(tail_bottom_weight)
         self.ordinal_num_bins = int(ordinal_num_bins)
         self.ordinal_boundaries: torch.Tensor | None = None
+        self.feature_names: tuple[str, ...] | None = None
         self.sam_enabled = bool(sam_enabled)
         self.sam_rho = float(sam_rho)
         self.sam_adaptive = bool(sam_adaptive)
@@ -618,6 +619,93 @@ class GeneralPTNN(QlibGeneralPTNN):
     def _format_training_value(value: float) -> str:
         return f"{value:.6f}" if np.isfinite(value) else "unavailable"
 
+    def _schema_model(self) -> nn.Module:
+        if isinstance(self.dnn_model, _OrdinalScoreModel):
+            return self.dnn_model.base_model
+        return self.dnn_model
+
+    @staticmethod
+    def _normalise_feature_names(columns: Any) -> tuple[str, ...]:
+        names = []
+        for column in columns:
+            if isinstance(column, tuple):
+                if not column:
+                    raise ValueError("feature schema contains an empty column name")
+                column = column[-1]
+            names.append(str(column))
+        return tuple(names)
+
+    @classmethod
+    def _feature_names_from_frame(cls, data: Any) -> tuple[str, ...] | None:
+        if not isinstance(data, pd.DataFrame) or not isinstance(data.columns, pd.MultiIndex):
+            return None
+        if "feature" not in data.columns.get_level_values(0):
+            return None
+        return cls._normalise_feature_names(data["feature"].columns)
+
+    @classmethod
+    def _feature_names_from_dataset(
+        cls,
+        dataset: Any,
+        *,
+        data_key: str,
+        prepared_data: Any = None,
+    ) -> tuple[str, ...] | None:
+        handler = getattr(dataset, "handler", None)
+        get_cols = getattr(handler, "get_cols", None)
+        if callable(get_cols):
+            return cls._normalise_feature_names(get_cols(col_set="feature", data_key=data_key))
+        return cls._feature_names_from_frame(prepared_data)
+
+    @staticmethod
+    def _required_feature_names(model: nn.Module) -> tuple[str, ...]:
+        required = getattr(model, "required_feature_names", ())
+        if isinstance(required, str):
+            required = (required,)
+        elif not isinstance(required, (list, tuple)):
+            raise ValueError("required_feature_names must be a string, list, or tuple")
+        names = tuple(str(name) for name in required)
+        if len(set(names)) != len(names):
+            raise ValueError("required_feature_names contains duplicates")
+        return names
+
+    def _bind_feature_schema(
+        self,
+        dataset: Any,
+        *,
+        data_key: str,
+        prepared_data: Any = None,
+    ) -> None:
+        model = self._schema_model()
+        required_names = self._required_feature_names(model)
+        feature_names = self._feature_names_from_dataset(
+            dataset,
+            data_key=data_key,
+            prepared_data=prepared_data,
+        )
+        if feature_names is None:
+            if required_names:
+                raise ValueError("dataset does not expose feature names required by the model")
+            return
+        if len(set(feature_names)) != len(feature_names):
+            raise ValueError("dataset feature names must be unique")
+
+        expected_features = self.pt_model_kwargs.get("num_features")
+        if expected_features is not None and len(feature_names) != int(expected_features):
+            raise ValueError(
+                f"dataset exposes {len(feature_names)} features but model expects {int(expected_features)}"
+            )
+        if self.feature_names is not None and feature_names != self.feature_names:
+            raise ValueError("feature schema changed between model training and inference")
+
+        missing_names = [name for name in required_names if name not in feature_names]
+        if missing_names:
+            raise ValueError(f"model requires unavailable features: {', '.join(missing_names)}")
+
+        model.feature_names = feature_names
+        model.feature_index = {name: position for position, name in enumerate(feature_names)}
+        self.feature_names = feature_names
+
     def fit(self, dataset, evals_result=None, save_path=None, reweighter=None):
         if evals_result is None:
             evals_result = {}
@@ -640,8 +728,9 @@ class GeneralPTNN(QlibGeneralPTNN):
         )
         train_data = dataset.prepare("train", col_set=["feature", "label"], data_key=DataHandlerLP.DK_L)
         valid_data = dataset.prepare("valid", col_set=["feature", "label"], data_key=DataHandlerLP.DK_L)
-        if train_data.empty or valid_data.empty:
+        if len(train_data) == 0 or len(valid_data) == 0:
             raise ValueError("Empty data from dataset, please check your dataset config.")
+        self._bind_feature_schema(dataset, data_key=DataHandlerLP.DK_L, prepared_data=train_data)
         if reweighter is None:
             train_weights = np.ones(len(train_data))
             valid_weights = np.ones(len(valid_data))
@@ -724,3 +813,10 @@ class GeneralPTNN(QlibGeneralPTNN):
         self.fitted = True
         if self.use_gpu:
             torch.cuda.empty_cache()
+
+    def predict(self, dataset, batch_size=None, n_jobs=None):
+        prepared_data = None
+        if not callable(getattr(getattr(dataset, "handler", None), "get_cols", None)):
+            prepared_data = dataset.prepare("test", col_set=["feature", "label"], data_key=DataHandlerLP.DK_I)
+        self._bind_feature_schema(dataset, data_key=DataHandlerLP.DK_I, prepared_data=prepared_data)
+        return super().predict(dataset, batch_size=batch_size, n_jobs=n_jobs)

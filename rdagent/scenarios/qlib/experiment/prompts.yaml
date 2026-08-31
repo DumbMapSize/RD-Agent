@@ -202,6 +202,7 @@ qlib_model_interface: |-
 
   The model can be configured as either "Tabular" for tabular models or "TimeSeries" for time series models. For a tabular model, the input shape is (batch_size, num_features), while for a time series model, the input shape is (batch_size, num_timesteps, num_features). In both cases, the output shape of the model should be (batch_size, 1).
   `num_features` will be directly set for the model based on the input data shape.
+  Before the first forward call, the runtime sets `feature_names` on the model to the ordered names of the final input tensor and sets `feature_index` to the corresponding name-to-position dictionary. A model that uses specific named features must declare them as a class-level tuple such as `required_feature_names = ("KMID",)` and resolve their positions through `self.feature_index`; never hard-code channel positions. The runtime validates that every required name exists.
   User will initialize the tabular model with the following code:
   ```python
   model = model_cls(num_features=num_features)

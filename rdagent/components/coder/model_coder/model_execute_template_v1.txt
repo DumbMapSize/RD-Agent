@@ -27,6 +27,28 @@ elif MODEL_TYPE == "Graph":
 else:
     raise ValueError(f"Unsupported model type: {MODEL_TYPE}")
 
+required_feature_names = getattr(m, "required_feature_names", ())
+if isinstance(required_feature_names, str):
+    required_feature_names = (required_feature_names,)
+elif not isinstance(required_feature_names, (list, tuple)):
+    raise ValueError("required_feature_names must be a string, list, or tuple")
+required_feature_names = tuple(str(name) for name in required_feature_names)
+if len(set(required_feature_names)) != len(required_feature_names):
+    raise ValueError("required_feature_names contains duplicates")
+if len(required_feature_names) > NUM_FEATURES:
+    raise ValueError("required_feature_names exceeds the simulated feature count")
+
+feature_names = list(required_feature_names)
+feature_number = 0
+while len(feature_names) < NUM_FEATURES:
+    candidate = f"FEATURE_{feature_number}"
+    feature_number += 1
+    if candidate not in feature_names:
+        feature_names.append(candidate)
+feature_names = tuple(feature_names)
+m.feature_names = feature_names
+m.feature_index = {name: position for position, name in enumerate(feature_names)}
+
 # Initialize all parameters of `m` to `param_init_value`
 for _, param in m.named_parameters():
     param.data.fill_(PARAM_INIT_VALUE)
