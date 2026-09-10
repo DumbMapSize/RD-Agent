@@ -32,19 +32,19 @@ port_analysis_config: &port_analysis_config
             signal: <PRED>
             topk: 20
             n_drop: 2
+            forbid_all_trade_at_limit: false
     backtest:
         start_time: 2025-01-02
         end_time: 2026-07-23
         account: 100000000
         benchmark: *benchmark
         exchange_kwargs:
-            # Preserve legacy float-threshold boundaries for float32 QLib fields.
             limit_threshold:
-                - "$change > $limit_rate"
-                - "$change < 0 - $limit_rate"
+                - "OpeningLimit($limit_rate, 1)"
+                - "OpeningLimit($limit_rate, -1)"
             deal_price: open
-            open_cost: 0.0005
-            close_cost: 0.0015
+            open_cost: 0.0001
+            close_cost: 0.0006
             min_cost: 5
 task:
     model:
