@@ -11,6 +11,13 @@ import pickle
 import torch
 from model import model_cls
 
+# Size both the model and its input to accommodate declared feature names.
+declared_features = getattr(model_cls, "required_feature_names", ())
+if isinstance(declared_features, str):
+    declared_features = (declared_features,)
+if isinstance(declared_features, (list, tuple)):
+    NUM_FEATURES = max(NUM_FEATURES, len(declared_features))
+
 if MODEL_TYPE == "Tabular":
     input_shape = (BATCH_SIZE, NUM_FEATURES)
     m = model_cls(num_features=input_shape[1])

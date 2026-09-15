@@ -1229,29 +1229,129 @@ def test_feature_schema_supports_time_series_handler_columns(tmp_path) -> None:
     assert trainer.dnn_model.feature_index["KMID"] == 1
 
 
-def test_model_execution_template_binds_required_feature_schema(tmp_path, monkeypatch) -> None:
+def _run_model_execution_template(
+    tmp_path, monkeypatch, model_cls, *, model_type="Tabular", num_features=30
+):
     model_module = ModuleType("model")
-    model_module.model_cls = SchemaAwareTabularModel
+    model_module.model_cls = model_cls
     monkeypatch.setitem(sys.modules, "model", model_module)
     monkeypatch.chdir(tmp_path)
     namespace = {
-        "MODEL_TYPE": "Tabular",
+        "MODEL_TYPE": model_type,
         "BATCH_SIZE": 4,
-        "NUM_FEATURES": 3,
+        "NUM_FEATURES": num_features,
         "NUM_TIMESTEPS": 4,
         "NUM_EDGES": 8,
         "INPUT_VALUE": 1.0,
         "PARAM_INIT_VALUE": 0.5,
     }
-    template_path = (
-        Path(__file__).parents[1]
-        / "rdagent/components/coder/model_coder/model_execute_template_v1.txt"
-    )
+    template_path = Path(__file__).parents[1] / "rdagent/components/coder/model_coder/model_execute_template_v1.txt"
 
     exec(compile(template_path.read_text(), str(template_path), "exec"), namespace)
+    return namespace
+
+
+def test_model_execution_template_binds_required_feature_schema(tmp_path, monkeypatch) -> None:
+    namespace = _run_model_execution_template(tmp_path, monkeypatch, SchemaAwareTabularModel, num_features=3)
 
     assert namespace["m"].feature_index["KMID"] == 0
     assert namespace["execution_model_output"].shape == (4, 1)
+    assert np.isfinite(namespace["execution_model_output"]).all()
+
+
+@pytest.mark.parametrize("model_type", ["Tabular", "TimeSeries", "Graph"])
+@pytest.mark.parametrize(
+    ("required_names", "initial_width", "expected_width"),
+    [
+        pytest.param(None, 30, 30, id="undeclared"),
+        pytest.param((), 30, 30, id="empty"),
+        pytest.param("KMID", 30, 30, id="single-string"),
+        pytest.param(["KMID"], 30, 30, id="single-list"),
+        pytest.param(tuple(f"ALPHA_{i}" for i in range(30)), 30, 30, id="boundary-30"),
+        pytest.param(tuple(f"ALPHA_{i}" for i in range(31)), 30, 31, id="grow-31"),
+        pytest.param([f"ALPHA_{i}" for i in range(64)], 30, 64, id="grow-64"),
+        pytest.param(tuple(f"ALPHA_{i}" for i in range(31)), 80, 80, id="keep-wider-input"),
+        pytest.param(("FEATURE_0", "KMID"), 30, 30, id="placeholder-collision"),
+    ],
+)
+def test_model_execution_template_feature_capacity(
+    tmp_path, monkeypatch, model_type, required_names, initial_width, expected_width
+) -> None:
+    names = (
+        ()
+        if required_names is None
+        else ((required_names,) if isinstance(required_names, str) else tuple(required_names))
+    )
+
+    class Model(nn.Module):
+        def __init__(self, num_features, num_timesteps=None):
+            super().__init__()
+            self.constructed_width = num_features
+            self.num_timesteps = num_timesteps
+            self.projection = nn.Linear(num_features, 1, bias=False)
+
+        def forward(self, features, edge_index=None):
+            if model_type == "TimeSeries":
+                assert features.shape[1] == self.num_timesteps
+                features = features[:, -1, :]
+            elif model_type == "Graph":
+                assert edge_index.shape == (2, 8)
+            columns = [self.feature_index[name] for name in names]
+            return self.projection(features) + features[:, columns].sum(dim=1, keepdim=True)
+
+    if required_names is not None:
+        Model.required_feature_names = required_names
+    namespace = _run_model_execution_template(
+        tmp_path, monkeypatch, Model, model_type=model_type, num_features=initial_width
+    )
+    model = namespace["m"]
+    assert model.constructed_width == expected_width
+    assert model.projection.in_features == expected_width
+    assert len(model.feature_names) == len(set(model.feature_names)) == expected_width
+    assert model.feature_names[: len(names)] == names
+    assert model.feature_index == {name: position for position, name in enumerate(model.feature_names)}
+    data = namespace["data"]
+    if model_type == "TimeSeries":
+        data = data[:, -1, :]
+    elif model_type == "Graph":
+        data = data[0]
+    assert data.shape == (4, expected_width)
+    expected = data.sum(dim=1, keepdim=True) * 0.5 + data[:, : len(names)].sum(dim=1, keepdim=True)
+    output = namespace["execution_model_output"]
+    assert output.shape == (4, 1)
+    assert np.isfinite(output).all()
+    np.testing.assert_allclose(output, expected.numpy(), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("model_type", ["Tabular", "TimeSeries"])
+@pytest.mark.parametrize(
+    "required_names", [None, 42, {"KMID"}, {"KMID": 0}, ("KMID", "KMID"), [1, "1"], ("KMID",) * 31]
+)
+def test_model_execution_template_still_rejects_invalid_feature_names(
+    tmp_path, monkeypatch, model_type, required_names
+) -> None:
+    class InvalidModel(nn.Module):
+        def __init__(self, num_features, num_timesteps=None):
+            super().__init__()
+
+        def forward(self, features):
+            pytest.fail("Invalid feature declarations must fail before forward")
+
+    InvalidModel.required_feature_names = required_names
+    with pytest.raises(ValueError):
+        _run_model_execution_template(tmp_path, monkeypatch, InvalidModel, model_type=model_type)
+    assert not (tmp_path / "execution_model_output.pkl").exists()
+
+
+def test_model_execution_template_preserves_instance_feature_declaration(tmp_path, monkeypatch) -> None:
+    class InstanceModel(TabularModel):
+        def __init__(self, num_features):
+            super().__init__(num_features)
+            self.required_feature_names = ("KMID",)
+
+    namespace = _run_model_execution_template(tmp_path, monkeypatch, InstanceModel)
+    assert namespace["m"].feature_index["KMID"] == 0
+    assert namespace["m"].projection.in_features == 30
     assert np.isfinite(namespace["execution_model_output"]).all()
 
 
