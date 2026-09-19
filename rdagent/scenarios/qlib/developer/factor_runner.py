@@ -117,7 +117,7 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
 
             logger.info(f"New factor processing ...")
             # Process the new factors data
-            new_factors = process_factor_data(exp)
+            new_factors = process_factor_data(exp, update_candidate_feedback=True)
 
             if new_factors.empty:
                 raise FactorEmptyError("Factors failed to run on the full sample, this round of experiment failed.")

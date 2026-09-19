@@ -154,8 +154,8 @@ class GeneralPTNN(QlibGeneralPTNN):
             raise ValueError("huber_delta must be positive")
         if float(loss_temperature) <= 0.0:
             raise ValueError("loss_temperature must be positive")
-        if not 0.0 < float(tail_fraction) <= 0.5:
-            raise ValueError("tail_fraction must be in (0, 0.5]")
+        if not 0.0 < float(tail_fraction) <= 1.0:
+            raise ValueError("tail_fraction must be in (0, 1]")
         if float(tail_top_weight) < 0.0 or float(tail_bottom_weight) < 0.0:
             raise ValueError("tail weights must be non-negative")
         if loss_name == "tail_listnet" and float(tail_top_weight) == 0.0 and float(tail_bottom_weight) == 0.0:

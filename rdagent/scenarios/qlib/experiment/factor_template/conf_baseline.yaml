@@ -21,6 +21,8 @@ data_handler_config: &data_handler_config
                             - ["Ref($close, -2) / Ref($open, -1) - 1"]
                             - ["LABEL0"]
     infer_processors:
+        - class: Float64Features
+          module_path: rdagent.scenarios.qlib.experiment.feature_processors
         - class: RobustZScoreNorm
           kwargs:
               fields_group: feature

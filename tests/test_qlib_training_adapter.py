@@ -361,6 +361,35 @@ def test_training_hyperparameters_normalize_first_batch_training_extensions() ->
     assert env["checkpoint_metric"] == "rank_ic"
 
 
+@pytest.mark.parametrize("tail_fraction", [1e-6, 0.2, 0.5, 0.75, 1.0])
+def test_tail_fraction_supported_range_reaches_trainer(tail_fraction) -> None:
+    config = normalize_training_hyperparameters(
+        {
+            "loss": {"name": "tail_listnet", "tail_fraction": tail_fraction},
+            "data_loader": {"batch_mode": "date", "drop_last": False},
+        },
+        "Tabular",
+    )
+    trainer = _trainer(loss="tail_listnet", tail_fraction=tail_fraction, batch_mode="date", train_drop_last=False)
+
+    assert config["loss"]["tail_fraction"] == tail_fraction
+    assert trainer.tail_fraction == tail_fraction
+
+
+@pytest.mark.parametrize("tail_fraction", [-0.1, 0.0, 1.000001, float("nan"), float("inf"), -float("inf")])
+def test_tail_fraction_invalid_values_rejected_by_config_and_trainer(tail_fraction) -> None:
+    with pytest.raises(ValueError, match="tail_fraction"):
+        normalize_training_hyperparameters(
+            {
+                "loss": {"name": "tail_listnet", "tail_fraction": tail_fraction},
+                "data_loader": {"batch_mode": "date", "drop_last": False},
+            },
+            "Tabular",
+        )
+    with pytest.raises(ValueError, match="tail_fraction"):
+        _trainer(loss="tail_listnet", tail_fraction=tail_fraction, batch_mode="date", train_drop_last=False)
+
+
 @pytest.mark.parametrize(
     ("config", "message"),
     [
@@ -465,14 +494,15 @@ def test_time_series_run_env_uses_one_lookback_for_dataset_and_model() -> None:
         "factor_template/conf_combined_factors_sota_model.yaml",
     ],
 )
-def test_all_general_ptnn_qrun_templates_render_effective_training_config(monkeypatch, relative_path) -> None:
+@pytest.mark.parametrize("tail_fraction", [0.15, 0.75, 1.0])
+def test_all_general_ptnn_qrun_templates_render_effective_training_config(monkeypatch, relative_path, tail_fraction) -> None:
     env = build_model_run_env(
         {
             "optimizer": {"name": "sgd", "momentum": 0.7},
             "loss": {
                 "name": "tail_listnet",
                 "temperature": 0.4,
-                "tail_fraction": 0.15,
+                "tail_fraction": tail_fraction,
                 "top_weight": 3.0,
                 "bottom_weight": 1.0,
             },
@@ -499,7 +529,7 @@ def test_all_general_ptnn_qrun_templates_render_effective_training_config(monkey
     assert kwargs["optimizer_momentum"] == 0.7
     assert kwargs["loss"] == "tail_listnet"
     assert kwargs["loss_temperature"] == 0.4
-    assert kwargs["tail_fraction"] == 0.15
+    assert kwargs["tail_fraction"] == tail_fraction
     assert kwargs["tail_top_weight"] == 3.0
     assert kwargs["sam_enabled"] is True
     assert kwargs["sam_adaptive"] is True
@@ -681,6 +711,67 @@ def test_ranking_losses_prefer_correct_cross_sectional_order(loss) -> None:
     reversed_order = -aligned
 
     assert trainer.loss_fn(aligned, label) < trainer.loss_fn(reversed_order, label)
+
+
+@pytest.mark.parametrize(("tail_fraction", "tail_size"), [(0.2, 2), (0.5, 4), (0.75, 6), (1.0, 7)])
+@pytest.mark.parametrize(("top_weight", "bottom_weight"), [(2.0, 1.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0)])
+def test_tail_listnet_loss_and_gradient_match_weighted_reference(
+    tail_fraction, tail_size, top_weight, bottom_weight
+) -> None:
+    trainer = _trainer(
+        loss="tail_listnet",
+        tail_fraction=tail_fraction,
+        tail_top_weight=top_weight,
+        tail_bottom_weight=bottom_weight,
+        loss_temperature=0.7,
+        batch_mode="date",
+        train_drop_last=False,
+    )
+    pred = torch.tensor([0.2, 0.8, -0.3, 0.5, -0.6, 0.1, 0.4], dtype=torch.float64, requires_grad=True)
+    label = torch.tensor([1.0, -2.0, 3.0, -1.0, 2.0, -3.0, 0.0], dtype=torch.float64)
+
+    def listnet(scores, targets):
+        return -(torch.softmax(targets / 0.7, dim=0) * torch.log_softmax(scores / 0.7, dim=0)).sum()
+
+    top = torch.topk(label, tail_size).indices
+    bottom = torch.topk(label, tail_size, largest=False).indices
+    expected = (
+        listnet(pred, label)
+        + top_weight * listnet(pred[top], label[top])
+        + bottom_weight * listnet(-pred[bottom], -label[bottom])
+    ) / (1.0 + top_weight + bottom_weight)
+    actual = trainer.loss_fn(pred, label)
+
+    torch.testing.assert_close(actual, expected, atol=1e-12, rtol=1e-12)
+    (actual_gradient,) = torch.autograd.grad(actual, pred)
+    (expected_gradient,) = torch.autograd.grad(expected, pred)
+    torch.testing.assert_close(actual_gradient, expected_gradient, atol=1e-12, rtol=1e-12)
+
+
+@pytest.mark.parametrize("count", [2, 7])
+@pytest.mark.parametrize("temperature", [0.7, 1.0])
+def test_full_tail_listnet_matches_mean_fold_loss_and_gradient(count, temperature) -> None:
+    trainer = _trainer(
+        loss="tail_listnet",
+        tail_fraction=1.0,
+        tail_top_weight=0.0,
+        tail_bottom_weight=1.0,
+        loss_temperature=temperature,
+        batch_mode="date",
+        train_drop_last=False,
+    )
+    generator = torch.Generator().manual_seed(2026)
+    pred = torch.randn(count, generator=generator, dtype=torch.float64, requires_grad=True)
+    label = torch.randn(count, generator=generator, dtype=torch.float64)
+    pair_scores = ((pred[:, None] - pred[None, :]) / temperature).reshape(-1)
+    pair_labels = ((label[:, None] - label[None, :]) / temperature).reshape(-1)
+    expected = -(torch.softmax(pair_labels, dim=0) * torch.log_softmax(pair_scores, dim=0)).sum() / 2
+    actual = trainer.loss_fn(pred, label)
+
+    torch.testing.assert_close(actual, expected, atol=1e-12, rtol=1e-12)
+    (actual_gradient,) = torch.autograd.grad(actual, pred)
+    (expected_gradient,) = torch.autograd.grad(expected, pred)
+    torch.testing.assert_close(actual_gradient, expected_gradient, atol=1e-12, rtol=1e-12)
 
 
 @pytest.mark.parametrize(("optimizer", "momentum"), [("adam", 0.0), ("adamw", 0.0), ("sgd", 0.8)])

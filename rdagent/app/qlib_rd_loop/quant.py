@@ -172,6 +172,7 @@ def main(
         quant_loop = QuantRDLoop(QUANT_PROP_SETTING)
     else:
         quant_loop = QuantRDLoop.load(path, checkout=checkout, replace_timer=replace_timer)
+        quant_loop.trace.scen.refresh_source_data()
 
     if not hasattr(quant_loop, "plan") or quant_loop.plan is None:
         quant_loop.plan = {}

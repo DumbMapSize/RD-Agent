@@ -25,6 +25,8 @@ data_handler_config: &data_handler_config
                     config: "combined_factors_df.parquet"
     
     infer_processors:
+        - class: Float64Features
+          module_path: rdagent.scenarios.qlib.experiment.feature_processors
         - class: RobustZScoreNorm
           kwargs:
               fields_group: feature

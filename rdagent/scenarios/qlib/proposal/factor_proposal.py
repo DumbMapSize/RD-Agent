@@ -120,7 +120,10 @@ class QlibFactorHypothesis2Experiment(FactorHypothesis2Experiment):
             for based_exp in based_experiments:
                 if isinstance(based_exp, QlibModelExperiment):
                     continue
-                for sub_task in based_exp.sub_tasks:
+                for index, sub_task in enumerate(based_exp.sub_tasks):
+                    feedback = based_exp.prop_dev_feedback
+                    if feedback is not None and (index >= len(feedback) or not feedback[index]):
+                        continue
                     if task.factor_name == sub_task.factor_name:
                         duplicate = True
                         break

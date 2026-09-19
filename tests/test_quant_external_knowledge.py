@@ -66,6 +66,7 @@ def test_quant_main_clears_stale_external_knowledge_on_resume_without_file(monke
     class DummyLoop:
         def __init__(self):
             self.plan = {"external_knowledge": {"factor": "stale seed"}}
+            self.trace = SimpleNamespace(scen=SimpleNamespace(refresh_source_data=lambda: None))
 
         async def run(self, step_n=None, loop_n=None, all_duration=None):
             self.run_args = {"step_n": step_n, "loop_n": loop_n, "all_duration": all_duration}

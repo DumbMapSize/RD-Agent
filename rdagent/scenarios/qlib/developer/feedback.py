@@ -173,6 +173,12 @@ class QlibFactorExperiment2Feedback(Experiment2Feedback):
         hypothesis_text = hypothesis.hypothesis
         current_result = exp.result
         tasks_factors = [task.get_task_information_and_implementation_result() for task in exp.sub_tasks]
+        for index, task in enumerate(tasks_factors):
+            task["execution_feedback"] = None
+            if task["factor_implementation"] == "False" and exp.prop_dev_feedback is not None:
+                feedback = exp.prop_dev_feedback[index]
+                if feedback is not None:
+                    task["execution_feedback"] = feedback.execution
         sota_result = exp.based_experiments[-1].result
 
         # Process the results to filter important metrics

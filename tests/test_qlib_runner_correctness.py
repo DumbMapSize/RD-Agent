@@ -38,7 +38,7 @@ def test_factor_runner_preserves_sota_rows_when_new_factor_is_sparse(monkeypatch
     monkeypatch.setattr(
         factor_runner_module,
         "process_factor_data",
-        lambda value: new if value is candidate else sota,
+        lambda value, **kwargs: new if value is candidate else sota,
     )
     runner = QlibFactorRunner(SimpleNamespace())
     monkeypatch.setattr(runner, "deduplicate_new_factors", lambda _sota, retained: retained)
@@ -158,7 +158,7 @@ def test_factor_runner_keeps_only_partially_deduplicated_factor_state(monkeypatc
     monkeypatch.setattr(
         factor_runner_module,
         "process_factor_data",
-        lambda value: new if value is candidate else sota,
+        lambda value, **kwargs: new if value is candidate else sota,
     )
     runner = QlibFactorRunner(SimpleNamespace())
     monkeypatch.setattr(runner, "deduplicate_new_factors", lambda _sota, factors: factors[["novel"]])
@@ -212,7 +212,7 @@ def test_factor_runner_reuses_sota_model_training_config_and_adapter(monkeypatch
     monkeypatch.setattr(
         factor_runner_module,
         "process_factor_data",
-        lambda value: new if value is candidate else sota,
+        lambda value, **kwargs: new if value is candidate else sota,
     )
     runner = QlibFactorRunner(SimpleNamespace())
     monkeypatch.setattr(runner, "deduplicate_new_factors", lambda _sota, factors: factors)

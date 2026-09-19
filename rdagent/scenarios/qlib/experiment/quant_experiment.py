@@ -39,7 +39,7 @@ class QlibModelExperiment(ModelExperiment[ModelTask, QlibFBWorkspace, ModelFBWor
 class QlibQuantScenario(Scenario):
     def __init__(self) -> None:
         super().__init__()
-        self._source_data = deepcopy(get_data_folder_intro())
+        self.refresh_source_data()
 
         self._rich_style_description = deepcopy(T(".prompts:qlib_factor_rich_style_description").r())
         self._experiment_setting = deepcopy(T(".prompts:qlib_factor_experiment_setting").r())
@@ -67,6 +67,9 @@ class QlibQuantScenario(Scenario):
             return factor_background
         else:
             return model_background
+
+    def refresh_source_data(self) -> None:
+        self._source_data = deepcopy(get_data_folder_intro())
 
     def get_source_data_desc(self) -> str:
         return self._source_data

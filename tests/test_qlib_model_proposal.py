@@ -142,7 +142,13 @@ def test_loop_94_style_response_cannot_silently_default_tail_loss_parameters() -
         normalize_generated_training_hyperparameters(config, "TimeSeries")
 
 
-def test_model_response_conversion_keeps_hypothesis_training_values(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize(
+    ("tail_fraction", "top_weight", "bottom_weight"),
+    [(0.15, 0.5, 0.5), (0.75, 1.0, 1.0), (1.0, 0.0, 1.0), (1.0, 1.0, 1.0)],
+)
+def test_model_response_conversion_keeps_hypothesis_training_values(
+    monkeypatch, tmp_path, tail_fraction, top_weight, bottom_weight
+) -> None:
     monkeypatch.setattr(RD_AGENT_SETTINGS, "workspace_path", tmp_path / "workspaces")
     training = _base_training_config()
     training.update(
@@ -150,9 +156,9 @@ def test_model_response_conversion_keeps_hypothesis_training_values(monkeypatch,
             "loss": {
                 "name": "tail_listnet",
                 "temperature": 0.2,
-                "tail_fraction": 0.15,
-                "top_weight": 0.5,
-                "bottom_weight": 0.5,
+                "tail_fraction": tail_fraction,
+                "top_weight": top_weight,
+                "bottom_weight": bottom_weight,
             },
             "data_loader": {"batch_mode": "date", "shuffle": False, "drop_last": False},
             "checkpoint": {"metric": "topk_precision", "topk": 50},
@@ -180,6 +186,6 @@ def test_model_response_conversion_keeps_hypothesis_training_values(monkeypatch,
     task = experiment.sub_tasks[0]
     assert task.hyperparameters == {"hidden_size": 8}
     assert task.training_hyperparameters["loss"]["temperature"] == 0.2
-    assert task.training_hyperparameters["loss"]["tail_fraction"] == 0.15
-    assert task.training_hyperparameters["loss"]["top_weight"] == 0.5
-    assert task.training_hyperparameters["loss"]["bottom_weight"] == 0.5
+    assert task.training_hyperparameters["loss"]["tail_fraction"] == tail_fraction
+    assert task.training_hyperparameters["loss"]["top_weight"] == top_weight
+    assert task.training_hyperparameters["loss"]["bottom_weight"] == bottom_weight

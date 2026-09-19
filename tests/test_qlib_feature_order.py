@@ -25,7 +25,10 @@ TEMPLATES = (
 
 
 @pytest.mark.parametrize("relative_path", TEMPLATES)
-def test_research_templates_preserve_values_and_use_the_same_column_order(relative_path, monkeypatch, tmp_path):
+@pytest.mark.parametrize("factor_kind", ["float32_zero", "float64_zero", "float64_nan", "float64_varying", "int64"])
+def test_research_templates_preserve_values_and_use_the_same_column_order(
+    relative_path, factor_kind, monkeypatch, tmp_path
+):
     path = TEMPLATE_ROOT / relative_path
     env = build_model_run_env({}, "Tabular", num_features=159)
     config = yaml.safe_load(Template(path.read_text()).render(**env))
@@ -57,7 +60,14 @@ def test_research_templates_preserve_values_and_use_the_same_column_order(relati
     loader = handler_config["kwargs"].get("data_loader", {})
     extra_columns = pd.MultiIndex.from_tuples([("feature", "AAA_test_factor")])
     factor_path = tmp_path / "combined_factors_df.parquet"
-    pd.DataFrame(np.float32(0), index=index, columns=extra_columns).to_parquet(factor_path)
+    factor_values = {
+        "float32_zero": np.zeros(len(index), dtype="float32"),
+        "float64_zero": np.zeros(len(index), dtype="float64"),
+        "float64_nan": np.full(len(index), np.nan, dtype="float64"),
+        "float64_varying": np.linspace(-0.123456789, 0.987654321, len(index)),
+        "int64": np.arange(len(index), dtype="int64"),
+    }[factor_kind]
+    pd.DataFrame(factor_values, index=index, columns=extra_columns).to_parquet(factor_path)
     for child in loader.get("kwargs", {}).get("dataloader_l", []):
         if child["class"].endswith("StaticDataLoader"):
             child["kwargs"]["config"] = str(factor_path)
@@ -72,6 +82,10 @@ def test_research_templates_preserve_values_and_use_the_same_column_order(relati
         fit_start_time=segments["train"][0],
         fit_end_time=segments["train"][1],
         infer_processors=[
+            {
+                "class": "Float64Features",
+                "module_path": "rdagent.scenarios.qlib.experiment.feature_processors",
+            },
             {"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}},
             {"class": "Fillna", "kwargs": {"fields_group": "feature"}},
         ],
@@ -87,3 +101,12 @@ def test_research_templates_preserve_values_and_use_the_same_column_order(relati
         )
         expected = reference.fetch(data_key=data_key, col_set=DataHandlerLP.CS_RAW).sort_index(axis=1)
         pd.testing.assert_frame_equal(actual, expected, check_exact=True)
+
+    actual_norm = handler.infer_processors[1]
+    reference_norm = reference.infer_processors[1]
+    indices = actual_norm.cols.get_indexer(reference_norm.cols)
+    assert (indices >= 0).all()
+    np.testing.assert_array_equal(actual_norm.mean_train[indices], reference_norm.mean_train)
+    np.testing.assert_array_equal(actual_norm.std_train[indices], reference_norm.std_train)
+    assert actual_norm.mean_train.dtype == np.dtype("float64")
+    assert actual_norm.std_train.dtype == np.dtype("float64")

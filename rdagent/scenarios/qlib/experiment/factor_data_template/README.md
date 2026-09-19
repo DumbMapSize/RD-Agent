@@ -16,9 +16,18 @@ NOTE: **key is always "data" for all hdf5 files **.
 # For different data, We have some basic knowledge for them
 
 ## Daily price and volume data
-$open: open price of the stock on that day.
-$close: close price of the stock on that day.
-$high: high price of the stock on that day.
-$low: low price of the stock on that day.
-$volume: volume of the stock on that day.
-$factor: factor value of the stock on that day.
+$open: adjusted open price of the stock on that day.
+$close: adjusted close price of the stock on that day.
+$high: adjusted high price of the stock on that day.
+$low: adjusted low price of the stock on that day.
+$volume: adjusted traded volume, equal to the day's raw traded shares divided by $factor.
+$factor: the complete price-adjustment multiplier, including any instrument-specific normalization.
+
+For these QLib exports, adjusted_price = nominal_price * $factor for each OHLC field.
+Actual nominal close in CNY per share is $close / $factor; no additional instrument-specific scale is required.
+Use nominal prices for cross-stock price comparisons and adjusted prices directly for return calculations.
+The reconstruction requires finite, strictly positive prices and $factor.
+
+Raw traded volume in shares is $volume * $factor; volume is inversely adjusted by the same complete multiplier as prices.
+For cross-stock liquidity comparisons, the nominal close-times-shares proxy in CNY is ($close / $factor) * ($volume * $factor) = $close * $volume.
+This is a closing-price approximation, not the actual transaction amount.

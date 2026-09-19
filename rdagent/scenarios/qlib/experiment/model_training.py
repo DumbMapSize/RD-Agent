@@ -213,8 +213,8 @@ def _normalise_loss(raw: dict[str, Any]) -> dict[str, Any]:
             minimum=0.0,
             strict_minimum=True,
         )
-        if tail_fraction > 0.5:
-            raise ValueError("training_hyperparameters.loss.tail_fraction must be <= 0.5")
+        if tail_fraction > 1.0:
+            raise ValueError("training_hyperparameters.loss.tail_fraction must be <= 1.0")
         normalized.update(
             {
                 "tail_fraction": tail_fraction,
