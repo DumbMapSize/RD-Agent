@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from rdagent.app.qlib_rd_loop.conf import QUANT_PROP_SETTING
 from rdagent.components.coder.factor_coder.factor import FactorTask
 from rdagent.components.coder.model_coder.model import ModelTask
@@ -44,7 +46,7 @@ def make_feedback(decision=False):
     )
 
 
-def test_factor_history_keeps_hypothesis_and_formula_but_not_variable_prose():
+def test_factor_history_keeps_reason_and_formula_without_repeated_hypothesis():
     task = FactorTask(
         factor_name="factor-marker",
         factor_description="description-marker",
@@ -62,7 +64,6 @@ def test_factor_history_keeps_hypothesis_and_formula_but_not_variable_prose():
     rendered = T("scenarios.qlib.prompts:quant_hypothesis_and_feedback").r(trace=trace)
 
     for marker in (
-        "factor-hypothesis-marker",
         "factor-reason-marker",
         "factor-marker",
         "description-marker",
@@ -72,6 +73,7 @@ def test_factor_history_keeps_hypothesis_and_formula_but_not_variable_prose():
         "evaluation-marker",
     ):
         assert marker in rendered
+    assert "factor-hypothesis-marker" not in rendered
     assert "long-variable-explanation-marker" not in rendered
 
 
@@ -109,10 +111,12 @@ def test_model_history_uses_actual_task_and_reason_instead_of_repeated_hypothesi
         assert marker in rendered
 
 
-def test_model_history_without_task_keeps_full_hypothesis():
+@pytest.mark.parametrize("action", ["factor", "model"])
+@pytest.mark.parametrize("tasks", [[], [None]])
+def test_history_without_task_keeps_full_hypothesis(action, tasks):
     experiment = SimpleNamespace(
-        hypothesis=DummyHypothesis("model", "failed-model-hypothesis-marker", "model-reason-marker"),
-        sub_tasks=[],
+        hypothesis=DummyHypothesis(action, "failed-hypothesis-marker", "reason-marker"),
+        sub_tasks=tasks,
         result=None,
     )
     trace = Trace(DummyQuantScenario())
@@ -120,7 +124,7 @@ def test_model_history_without_task_keeps_full_hypothesis():
 
     rendered = T("scenarios.qlib.prompts:quant_hypothesis_and_feedback").r(trace=trace)
 
-    assert "failed-model-hypothesis-marker" in rendered
+    assert "failed-hypothesis-marker" in rendered
 
 
 def test_quant_experiment_generation_uses_research_history():
@@ -160,7 +164,9 @@ def test_quant_experiment_generation_uses_research_history():
 
     assert "factor-marker" in factor_context["hypothesis_and_feedback"]
     assert "repeated-model-hypothesis-marker" not in model_context["hypothesis_and_feedback"]
-    assert "architecture-marker" in model_context["hypothesis_and_feedback"]
+    assert "architecture-marker" not in model_context["hypothesis_and_feedback"]
+    assert "architecture-marker" in model_context["last_hypothesis_and_feedback"]
+    assert "architecture-marker" not in model_context["SOTA_hypothesis_and_feedback"]
     assert "sole executable source" in model_context["experiment_output_format"]
     assert "n_epochs" in model_context["experiment_output_format"]
     assert "optimizer" in model_context["experiment_output_format"]
@@ -192,7 +198,9 @@ def test_quant_hypothesis_generation_uses_research_history(monkeypatch):
     context, _ = QlibQuantHypothesisGen(scenario).prepare_context(trace)
 
     assert "repeated-model-hypothesis-marker" not in context["hypothesis_and_feedback"]
-    assert "architecture-marker" in context["hypothesis_and_feedback"]
+    assert "architecture-marker" not in context["hypothesis_and_feedback"]
+    assert "architecture-marker" in context["last_hypothesis_and_feedback"]
+    assert "architecture-marker" not in context["SOTA_hypothesis_and_feedback"]
     assert "repeated-model-hypothesis-marker" in context["last_hypothesis_and_feedback"]
     assert "supported root fields" in context["hypothesis_specification"]
     assert "`adamw`" in context["hypothesis_specification"]
@@ -237,7 +245,8 @@ def test_quant_hypothesis_generation_keeps_action_split(monkeypatch):
     context, _ = QlibQuantHypothesisGen(scenario).prepare_context(trace)
     factor_history = context["hypothesis_and_feedback"]
 
-    assert "factor-history-marker" in factor_history
+    assert "factor-history-marker" not in factor_history
+    assert "factor-history-marker" in context["last_hypothesis_and_feedback"]
     assert "old-accepted-model-marker" in factor_history
     assert "new-rejected-model-marker" not in factor_history
 
@@ -247,7 +256,8 @@ def test_quant_hypothesis_generation_keeps_action_split(monkeypatch):
 
     assert "factor-history-marker" in model_history
     assert "old-accepted-model-marker" in model_history
-    assert "new-rejected-model-marker" in model_history
+    assert "new-rejected-model-marker" not in model_history
+    assert "new-rejected-model-marker" in context["last_hypothesis_and_feedback"]
 
 
 def test_non_quant_experiment_generation_keeps_original_history():
@@ -274,3 +284,118 @@ def test_non_quant_experiment_generation_keeps_original_history():
     )
 
     assert "original-hypothesis-marker" in context["hypothesis_and_feedback"]
+
+
+def test_latest_factor_details_are_compact_only_when_requested():
+    task = FactorTask(
+        "factor-marker",
+        "description-marker",
+        "formula-marker",
+        variables={"price-marker": "long-variable-explanation-marker"},
+    )
+    experiment = SimpleNamespace(
+        hypothesis=DummyHypothesis("factor", "hypothesis-marker", "reason-marker"),
+        sub_tasks=[task],
+        result=None,
+        stdout="training-log-marker",
+    )
+    feedback = make_feedback()
+    template = T("scenarios.qlib.prompts:last_hypothesis_and_feedback")
+
+    compact = template.r(experiment=experiment, feedback=feedback, compact_factor_tasks=True)
+    original = template.r(experiment=experiment, feedback=feedback)
+
+    assert "long-variable-explanation-marker" not in compact
+    assert "long-variable-explanation-marker" in original
+    for marker in (
+        "factor-marker",
+        "description-marker",
+        "formula-marker",
+        "price-marker",
+        "hypothesis-marker",
+        "reason-marker",
+        "training-log-marker",
+        "observation-marker",
+        "evaluation-marker",
+        "next-marker",
+        "feedback-reason-marker",
+    ):
+        assert marker in compact
+
+
+@pytest.mark.parametrize("action_selection", ["random", "llm"])
+def test_factor_context_excludes_only_the_separately_rendered_experiment(monkeypatch, action_selection):
+    monkeypatch.setattr(QUANT_PROP_SETTING, "action_selection", action_selection)
+    monkeypatch.setattr("rdagent.scenarios.qlib.proposal.quant_proposal.random.choice", lambda _: "factor")
+    captured = []
+
+    class FakeBackend:
+        def build_messages_and_create_chat_completion(self, user_prompt, *args, **kwargs):
+            captured.append(user_prompt)
+            return '{"action": "factor"}'
+
+    monkeypatch.setattr("rdagent.scenarios.qlib.proposal.quant_proposal.APIBackend", FakeBackend)
+
+    def make_experiment():
+        return SimpleNamespace(
+            hypothesis=DummyHypothesis("factor", "hypothesis-marker", "reason-marker"),
+            sub_tasks=[
+                FactorTask(
+                    "factor-marker",
+                    "description-marker",
+                    "formula-marker",
+                    variables={"price-marker": "long-variable-explanation-marker"},
+                )
+            ],
+            result=None,
+            stdout="training-log-marker",
+        )
+
+    older, latest = make_experiment(), make_experiment()
+    assert older is not latest
+    old_feedback, latest_feedback = make_feedback(), make_feedback()
+    old_feedback.observations = "older-result-marker"
+    latest_feedback.observations = "latest-result-marker"
+    trace = QuantTrace(DummyQuantScenario())
+    trace.hist = [(older, old_feedback), (latest, latest_feedback)]
+    original_nodes = list(trace.hist)
+
+    context, _ = QlibQuantHypothesisGen(trace.scen).prepare_context(trace)
+
+    history = context["hypothesis_and_feedback"]
+    details = context["last_hypothesis_and_feedback"]
+    assert "older-result-marker" in history
+    assert "latest-result-marker" not in history
+    assert "latest-result-marker" in details
+    assert "long-variable-explanation-marker" not in history + details
+    assert "hypothesis-marker" not in history
+    assert "hypothesis-marker" in details
+    assert trace.hist == original_nodes
+    assert trace.hist[0][0] is older and trace.hist[1][0] is latest
+    assert latest.sub_tasks[0].variables["price-marker"] == "long-variable-explanation-marker"
+    if captured:
+        assert captured[0].count("latest-result-marker") == 1
+        assert captured[0].count("older-result-marker") == 1
+        assert "long-variable-explanation-marker" not in captured[0]
+
+
+def test_history_keeps_all_tasks_and_partial_failure_feedback():
+    experiment = SimpleNamespace(
+        hypothesis=DummyHypothesis("factor", "hypothesis-marker", "reason-marker"),
+        sub_tasks=[
+            FactorTask("successful-factor", "first-description", "first-formula", factor_implementation=True),
+            FactorTask("failed-factor", "second-description", "second-formula", factor_implementation=False),
+        ],
+        result=None,
+    )
+    feedback = make_feedback()
+    feedback.observations = "successful-factor evaluated; failed-factor timed out"
+    trace = Trace(DummyQuantScenario())
+    trace.hist = [(experiment, feedback)]
+
+    rendered = T("scenarios.qlib.prompts:quant_hypothesis_and_feedback").r(trace=trace)
+
+    for value in ("first-formula", "second-formula", "reason-marker", feedback.observations):
+        assert value in rendered
+    assert experiment.sub_tasks[0].factor_implementation is True
+    assert experiment.sub_tasks[1].factor_implementation is False

@@ -106,25 +106,30 @@ class QlibModelHypothesis2Experiment(ModelHypothesis2Experiment):
                     "scenarios.qlib.prompts:quant_hypothesis_and_feedback"
                     if isinstance(trace.scen, QlibQuantScenario)
                     else "scenarios.qlib.prompts:hypothesis_and_feedback"
-                ).r(trace=specific_trace)
+                ).r(trace=specific_trace, detailed_experiment=last_experiment)
             else:
                 hypothesis_and_feedback = "No previous hypothesis and feedback available."
 
         last_hypothesis_and_feedback = (
             T("scenarios.qlib.prompts:last_hypothesis_and_feedback").r(
-                experiment=last_experiment, feedback=last_feedback
+                experiment=last_experiment,
+                feedback=last_feedback,
+                compact_factor_tasks=isinstance(trace.scen, QlibQuantScenario),
             )
             if last_experiment is not None
             else "No previous hypothesis and feedback available since it's the first round."
         )
 
-        sota_hypothesis_and_feedback = (
-            T("scenarios.qlib.prompts:sota_hypothesis_and_feedback").r(
+        if isinstance(trace.scen, QlibQuantScenario) and sota_experiment is not None and sota_experiment is last_experiment:
+            sota_hypothesis_and_feedback = "The latest trial above is also the current SOTA model."
+        elif sota_experiment is not None:
+            sota_hypothesis_and_feedback = T("scenarios.qlib.prompts:sota_hypothesis_and_feedback").r(
                 experiment=sota_experiment, feedback=sota_feedback
             )
-            if sota_experiment is not None
-            else "No SOTA hypothesis and feedback available since previous experiments were not accepted."
-        )
+        else:
+            sota_hypothesis_and_feedback = (
+                "No SOTA hypothesis and feedback available since previous experiments were not accepted."
+            )
 
         return {
             "target_hypothesis": str(hypothesis),

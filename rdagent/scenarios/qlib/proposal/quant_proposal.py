@@ -104,14 +104,16 @@ class QlibQuantHypothesisGen(FactorAndModelHypothesisGen):
         # ========= LLM ==========
         elif QUANT_PROP_SETTING.action_selection == "llm":
             hypothesis_and_feedback = (
-                T("scenarios.qlib.prompts:quant_hypothesis_and_feedback").r(trace=trace)
+                T("scenarios.qlib.prompts:quant_hypothesis_and_feedback").r(
+                    trace=trace, detailed_experiment=trace.hist[-1][0]
+                )
                 if len(trace.hist) > 0
                 else "No previous hypothesis and feedback available since it's the first round."
             )
 
             last_hypothesis_and_feedback = (
                 T("scenarios.qlib.prompts:last_hypothesis_and_feedback").r(
-                    experiment=trace.hist[-1][0], feedback=trace.hist[-1][1]
+                    experiment=trace.hist[-1][0], feedback=trace.hist[-1][1], compact_factor_tasks=True
                 )
                 if len(trace.hist) > 0
                 else "No previous hypothesis and feedback available since it's the first round."
@@ -138,6 +140,16 @@ class QlibQuantHypothesisGen(FactorAndModelHypothesisGen):
                 qaunt_rag = "Now, you need to try factors that can achieve high IC (e.g., machine learning-based factors)! Do not include factors that are similar to those in the SOTA factor library!"
         elif action == "model":
             qaunt_rag = "1. In Quantitative Finance, market data could be time-series, and GRU model/LSTM model are suitable for them. Do not generate GNN model as for now.\n2. Estimate the train/validation sample size from the configured market, daily frequency, and train/valid date windows. The estimate only needs to be order-of-magnitude accurate. Use it to choose conservative model capacity, batch size, and epochs; avoid oversized neural architectures. If you believe that the previous model itself is good but the training hyperparameters or model hyperparameters are not optimal, you can return the same model and adjust these parameters instead.\n"
+
+        last_experiment = None
+        last_hypothesis_and_feedback = None
+        for experiment, feedback in reversed(trace.hist):
+            if experiment.hypothesis.action == action:
+                last_experiment = experiment
+                last_hypothesis_and_feedback = T("scenarios.qlib.prompts:last_hypothesis_and_feedback").r(
+                    experiment=experiment, feedback=feedback, compact_factor_tasks=True
+                )
+                break
 
         if len(trace.hist) == 0:
             hypothesis_and_feedback = "No previous hypothesis and feedback available since it's the first round."
@@ -173,24 +185,21 @@ class QlibQuantHypothesisGen(FactorAndModelHypothesisGen):
                 specific_trace.hist.reverse()
                 hypothesis_and_feedback = T("scenarios.qlib.prompts:quant_hypothesis_and_feedback").r(
                     trace=specific_trace,
+                    detailed_experiment=last_experiment,
                 )
             else:
                 hypothesis_and_feedback = "No previous hypothesis and feedback available."
-
-        last_hypothesis_and_feedback = None
-        for i in range(len(trace.hist) - 1, -1, -1):
-            if trace.hist[i][0].hypothesis.action == action:
-                last_hypothesis_and_feedback = T("scenarios.qlib.prompts:last_hypothesis_and_feedback").r(
-                    experiment=trace.hist[i][0], feedback=trace.hist[i][1]
-                )
-                break
 
         sota_hypothesis_and_feedback = None
         if action == "model":
             for i in range(len(trace.hist) - 1, -1, -1):
                 if trace.hist[i][0].hypothesis.action == "model" and trace.hist[i][1].decision is True:
-                    sota_hypothesis_and_feedback = T("scenarios.qlib.prompts:sota_hypothesis_and_feedback").r(
-                        experiment=trace.hist[i][0], feedback=trace.hist[i][1]
+                    sota_hypothesis_and_feedback = (
+                        "The latest trial above is also the current SOTA model."
+                        if trace.hist[i][0] is last_experiment
+                        else T("scenarios.qlib.prompts:sota_hypothesis_and_feedback").r(
+                            experiment=trace.hist[i][0], feedback=trace.hist[i][1]
+                        )
                     )
                     break
 
