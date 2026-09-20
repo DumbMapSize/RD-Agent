@@ -52,6 +52,25 @@ def test_factor_runner_preserves_sota_rows_when_new_factor_is_sparse(monkeypatch
     assert pd.isna(combined.loc[(pd.Timestamp("2026-01-05"), "SH600000"), ("feature", "new")])
 
 
+def test_factor_deduplication_keeps_undefined_correlations() -> None:
+    index = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2026-01-05", "2026-01-06"]), ["SH600000", "SH600001", "SH600002"]],
+        names=["datetime", "instrument"],
+    )
+    sota = pd.DataFrame({"sota": [1.0, 2.0, 3.0, 3.0, 2.0, 1.0]}, index=index)
+    candidates = pd.DataFrame(
+        {
+            "duplicate": sota["sota"],
+            "undefined": [1.0] * len(index),
+        },
+        index=index,
+    )
+
+    retained = QlibFactorRunner(SimpleNamespace()).deduplicate_new_factors(sota, candidates)
+
+    assert retained.columns.tolist() == ["undefined"]
+
+
 def test_qlib_runners_do_not_cache_whole_experiment_results() -> None:
     assert not hasattr(QlibFactorRunner.develop, "__wrapped__")
     assert not hasattr(QlibModelRunner.develop, "__wrapped__")

@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -141,6 +142,19 @@ def test_existing_invalid_output_checks_also_clear_candidate_state(tmp_path, inv
     assert exp.sub_tasks[0].factor_implementation is False
     assert not exp.prop_dev_feedback[0]
     assert exp.prop_dev_feedback[0].execution != "debug passed"
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf])
+def test_nonfinite_full_sample_output_clears_candidate_state(tmp_path, value):
+    exp = make_exp(tmp_path, ["invalid"])
+    exp.sub_workspace_list[0].frame.iloc[:, :] = value
+
+    with pytest.raises(FactorEmptyError, match="no finite factor values"):
+        process_factor_data(exp, update_candidate_feedback=True)
+
+    assert exp.sub_tasks[0].factor_implementation is False
+    assert not exp.prop_dev_feedback[0]
+    assert "no finite factor values" in exp.prop_dev_feedback[0].execution
 
 
 def test_all_success_preserves_values_order_and_sparse_rows(tmp_path):

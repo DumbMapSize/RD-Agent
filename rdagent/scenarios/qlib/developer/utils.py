@@ -1,6 +1,7 @@
 from copy import copy
 from typing import List
 
+import numpy as np
 import pandas as pd
 
 from rdagent.components.coder.CoSTEER.evaluators import CoSTEERMultiFeedback
@@ -59,10 +60,17 @@ def process_factor_data(
                     if df is not None and "datetime" in df.index.names:
                         time_diff = df.index.get_level_values("datetime").to_series().diff().dropna().unique()
                         if pd.Timedelta(minutes=1) not in time_diff:
-                            factor_dfs.append(df)
-                            logger.info(f"Factor data from {task.factor_name} is successfully generated.")
-                            continue
-                        reason = f"Output contains one-minute intervals. {message}"
+                            try:
+                                has_finite_value = bool(np.isfinite(df.to_numpy()).any())
+                            except TypeError:
+                                has_finite_value = False
+                            if has_finite_value:
+                                factor_dfs.append(df)
+                                logger.info(f"Factor data from {task.factor_name} is successfully generated.")
+                                continue
+                            reason = f"Output contains no finite factor values. {message}"
+                        else:
+                            reason = f"Output contains one-minute intervals. {message}"
                     else:
                         reason = message if df is None else f"Output lacks a datetime index. {message}"
                     failure = f"Full-sample execution failed for {task.factor_name}: {reason}"

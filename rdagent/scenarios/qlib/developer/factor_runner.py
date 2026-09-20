@@ -68,7 +68,7 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
         )
         IC_max.index = pd.MultiIndex.from_product([range(SOTA_feature.shape[1]), range(new_feature.shape[1])])
         IC_max = IC_max.unstack().max(axis=0)
-        return new_feature.iloc[:, IC_max[IC_max < 0.99].index]
+        return new_feature.iloc[:, IC_max[IC_max.isna() | (IC_max < 0.99)].index]
 
     @staticmethod
     def _remove_deduplicated_factor_state(
