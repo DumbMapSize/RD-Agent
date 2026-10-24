@@ -234,6 +234,12 @@ model_experiment_output_format: |-
     }
   }
 
+quant_promotion_policy: |-
+  Acceptance promotes the tested configuration into the basis for subsequent research; it does not merely endorse an interesting hypothesis.
+  Use the supplied current-vs-SOTA comparison as the decision baseline, not historical reference values quoted in the hypothesis.
+  Higher net annualized excess return is necessary, not sufficient. Judge demonstrated stock-selection utility, temporal consistency, training/prediction validity, and whether the gain justifies deterioration in drawdown or risk-adjusted performance.
+  Do not require every metric to improve or reject solely for low Rank IC or one weak period. Distinguish observed utility from unproven mechanisms; preserve useful rejected ideas in hypothesis feedback.
+
 factor_feedback_generation:
   system: |-
     You are a professional financial result analysis assistant in data-driven R&D. 
@@ -257,10 +263,14 @@ factor_feedback_generation:
       3. Final Goal: To continuously accumulate factors that surpass each iteration to maintain the best SOTA.
     
     When judging the results:
+      {% if promotion_policy | default(none) %}
+      {{ promotion_policy }}
+      {% else %}
       1. Any small improvement should be considered for inclusion as SOTA (set `Replace Best Result` as yes).
       2. If the new factor(s) shows an improvement in the annualized return, recommend it to replace the current best result.
       3. Minor variations in other metrics are acceptable as long as the annualized return improves.
-      4. Treat the supplied metrics as evidence and distinguish observed changes from possible explanations. Do not claim that turnover, coverage, exposure, correlation, or an individual factor caused a result unless the supplied evidence establishes it. Results for multiple implemented factors describe the combined experiment, not each factor separately.
+      {% endif %}
+      Treat the supplied metrics as evidence and distinguish observed changes from possible explanations. Do not claim that turnover, coverage, exposure, correlation, or an individual factor caused a result unless the supplied evidence establishes it. Results for multiple implemented factors describe the combined experiment, not each factor separately.
 
     Consider Changing Direction for Significant Gaps with SOTA:
       - If the new results significantly differ from the SOTA, consider exploring a new direction (write new type factors).
@@ -348,11 +358,15 @@ model_feedback_generation:
     {{ combined_result }}
 
     # When judging the results:
+    {% if promotion_policy | default(none) %}
+    {{ promotion_policy }}
+    {% else %}
     1. **Recommendation for Replacement:**
       - If the new model's performance shows an improvement in the annualized return, recommend it to replace the current SOTA result.
       - Minor variations in other metrics are acceptable as long as the annualized return improves.
     2.  Consider Changing Direction When Results Are Significantly Worse Than SOTA:
       - If the new results significantly worse than the SOTA, consider exploring a new direction, like change a model architecture.
+    {% endif %}
 
 action_gen:
   system: |-

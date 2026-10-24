@@ -1,7 +1,10 @@
+import hashlib
 import json
+import pickle
 from pathlib import Path
 from typing import Any, Dict
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -155,6 +158,125 @@ def process_results(current_result: Any, sota_result: Any) -> str:
     return "\n".join(sections) if sections else "No comparable backtest metrics are available."
 
 
+def _sample_digest(values: pd.Series | pd.Index) -> str:
+    return hashlib.sha256(pd.util.hash_pandas_object(values).to_numpy().tobytes()).hexdigest()
+
+
+def _quarterly_summary(values: pd.Series, *, aggregate: str) -> dict:
+    return {
+        str(quarter): {
+            "valid_days": int(group.notna().sum()),
+            aggregate: float(getattr(group, aggregate)()) if group.notna().any() else None,
+        }
+        for quarter, group in values.groupby(values.index.to_period("Q"))
+    }
+
+
+def _topk_label_diagnostic(scores: pd.Series, labels: pd.Series, topk: int) -> pd.DataFrame:
+    scores = scores.replace([np.inf, -np.inf], np.nan)
+    labels = labels.reindex(scores.index).replace([np.inf, -np.inf], np.nan)
+    finite = scores.dropna()
+    ranks = finite.groupby(level="datetime").rank(ascending=False, method="min")
+    ties = finite.groupby([finite.index.get_level_values("datetime"), finite]).transform("size")
+    # Fractional boundary ties avoid choosing stocks by index order or future labels.
+    weights = ((topk - ranks + 1) / ties).clip(0, 1)
+    selected_labels = labels.reindex(weights.index)
+    covered_weight = weights.where(selected_labels.notna(), 0).groupby(level="datetime").sum()
+    top_mean = (weights * selected_labels).groupby(level="datetime").sum(min_count=1) / covered_weight
+    excess = top_mean - labels.groupby(level="datetime").mean()
+    enough_scores = finite.groupby(level="datetime").size() >= topk
+    return pd.DataFrame({
+        "excess_label": excess.where(enough_scores.reindex(excess.index, fill_value=False)),
+        "label_coverage": covered_weight / topk,
+    })
+
+
+def _experiment_evidence(exp: Experiment | None) -> dict:
+    if exp is None:
+        return {"unavailable": "No comparison experiment"}
+    workspace = getattr(exp, "experiment_workspace", None)
+    path = getattr(workspace, "workspace_path", None)
+    evidence = {"portfolio": "unavailable", "prediction": "unavailable", "topk_labels": "unavailable"}
+    samples = {}
+    try:
+        if path is None:
+            return evidence
+        path = Path(path)
+        report = pd.read_pickle(path / "ret.pkl").sort_index()
+        if not isinstance(report.index, pd.DatetimeIndex) or not report.index.is_unique:
+            raise ValueError("Backtest dates must be unique")
+        daily = report["return"] - report["bench"] - report["cost"]
+        if report.empty or not np.isfinite(report[["return", "bench", "cost"]].to_numpy()).all():
+            raise ValueError("Backtest daily returns are missing or nonfinite")
+        evidence["portfolio"] = {
+            "dates": [str(report.index.min().date()), str(report.index.max().date())],
+            "quarterly_net_excess": _quarterly_summary(daily, aggregate="sum"),
+        }
+        samples["benchmark_and_dates"] = _sample_digest(report["bench"])
+        reports = list((path / "mlruns").glob("*/*/artifacts/portfolio_analysis/report_normal_1day.pkl"))
+        matches = [file for file in reports if pd.read_pickle(file).sort_index().equals(report)]
+        if len(matches) != 1:
+            raise ValueError("No unique recorder matches ret.pkl")
+        artifacts = matches[0].parent.parent
+        scores = pd.read_pickle(artifacts / "pred.pkl").iloc[:, 0].sort_index()
+        if not scores.index.is_unique or "datetime" not in scores.index.names:
+            raise ValueError("Prediction index must contain unique stock/date rows")
+        scores = scores.replace([np.inf, -np.inf], np.nan)
+        unique = scores.groupby(level="datetime").nunique()
+        largest_tie = scores.groupby(level="datetime").apply(
+            lambda group: group.value_counts(normalize=True).max()
+        )
+        evidence["prediction"] = {
+            "rows": len(scores), "finite_fraction": float(scores.notna().mean()),
+            "daily_unique_min": int(unique.min()), "daily_unique_median": float(unique.median()),
+            "largest_tie_fraction_median": float(largest_tie.median()) if largest_tie.notna().any() else None,
+        }
+        samples["prediction_index"] = _sample_digest(scores.index)
+        labels = pd.read_pickle(artifacts / "label.pkl").iloc[:, 0].sort_index()
+        if not labels.index.is_unique or not labels.index.equals(scores.index):
+            raise ValueError("Prediction and label indices differ")
+        samples["labels"] = _sample_digest(labels)
+        task = pd.read_pickle(artifacts / "task")
+        strategies = [record.get("kwargs", {}).get("config", {}).get("strategy", {}) for record in task["record"]]
+        topks = [s.get("kwargs", {}).get("topk") for s in strategies if s.get("class") == "TopkDropoutStrategy"]
+        if len(topks) != 1 or type(topks[0]) is not int or topks[0] <= 0:
+            raise ValueError("No supported TopkDropoutStrategy topk")
+        topk = topks[0]
+        tail = _topk_label_diagnostic(scores, labels, topk)
+        evidence["topk_labels"] = {
+            "topk": topk,
+            "mean_excess_label": float(tail.excess_label.mean()) if tail.excess_label.notna().any() else None,
+            "mean_label_coverage": float(tail.label_coverage.mean()) if tail.label_coverage.notna().any() else None,
+            "quarterly_excess_label": _quarterly_summary(tail.excess_label, aggregate="mean"),
+        }
+        samples["topk"] = topk
+    except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError, EOFError, pickle.UnpicklingError, ImportError) as exc:
+        evidence["unavailable_reason"] = f"{type(exc).__name__}: {exc}"
+    evidence["_samples"] = samples
+    return evidence
+
+
+def _comparison_evidence(current: Experiment, sota: Experiment | None) -> str:
+    left, right = _experiment_evidence(current), _experiment_evidence(sota)
+    left_samples, right_samples = left.get("_samples", {}), right.get("_samples", {})
+    aligned = {
+        key: left_samples[key] == right_samples[key] if key in left_samples and key in right_samples else None
+        for key in ("benchmark_and_dates", "prediction_index", "labels", "topk")
+    }
+    payload = {
+        "Current": {k: v for k, v in left.items() if k != "_samples"},
+        "SOTA": {k: v for k, v in right.items() if k != "_samples"},
+        "Aligned_samples": aligned,
+    }
+    return (
+        "\nArtifact diagnostics (null = unavailable; unequal samples are not controlled comparisons). "
+        "Quarterly portfolio sums are sum(return - benchmark - cost), not compounded returns. "
+        "Top-k labels use score-only selection, fractional boundary ties, and available labels after selection; "
+        "excess is relative to the daily universe mean, not a holdings/cost backtest.\n"
+        + json.dumps(payload, allow_nan=False)
+    )
+
+
 class QlibFactorExperiment2Feedback(Experiment2Feedback):
     def generate_feedback(self, exp: Experiment, trace: Trace) -> HypothesisFeedback:
         """
@@ -183,11 +305,15 @@ class QlibFactorExperiment2Feedback(Experiment2Feedback):
 
         # Process the results to filter important metrics
         combined_result = process_results(current_result, sota_result)
+        promotion_policy = None
+        if isinstance(self.scen, QlibQuantScenario):
+            combined_result += _comparison_evidence(exp, exp.based_experiments[-1])
+            promotion_policy = T("scenarios.qlib.prompts:quant_promotion_policy").r()
 
         # Generate the system prompt
         if isinstance(self.scen, QlibQuantScenario):
             sys_prompt = T("scenarios.qlib.prompts:factor_feedback_generation.system").r(
-                scenario=self.scen.get_scenario_all_desc(action="factor")
+                scenario=self.scen.get_scenario_all_desc(action="factor"), promotion_policy=promotion_policy,
             )
         else:
             sys_prompt = T("scenarios.qlib.prompts:factor_feedback_generation.system").r(
@@ -274,6 +400,10 @@ class QlibModelExperiment2Feedback(Experiment2Feedback):
             exp.result,
             comparison_experiment.result if comparison_experiment is not None else None,
         ) if exp.result is not None else "execution failed"
+        promotion_policy = None
+        if isinstance(self.scen, QlibQuantScenario):
+            combined_result += _comparison_evidence(exp, comparison_experiment)
+            promotion_policy = T("scenarios.qlib.prompts:quant_promotion_policy").r()
         user_prompt = T("scenarios.qlib.prompts:model_feedback_generation.user").r(
             has_sota=comparison_experiment is not None,
             sota_model_hypothesis=SOTA_model_hypothesis,
@@ -282,6 +412,7 @@ class QlibModelExperiment2Feedback(Experiment2Feedback):
             hypothesis=hypothesis,
             exp=exp,
             combined_result=combined_result,
+            promotion_policy=promotion_policy,
         )
 
         # Call the APIBackend to generate the response for hypothesis feedback
