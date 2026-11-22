@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pandas as pd
+import pytest
+from pydantic import TypeAdapter, ValidationError
 
 from rdagent.scenarios.qlib.developer import feedback as feedback_module
 from rdagent.scenarios.qlib.developer.feedback import (
@@ -24,6 +26,22 @@ def _response(*, decision: bool, observation: str) -> str:
             "Decision": decision,
         }
     )
+
+
+@pytest.mark.parametrize("field,value", [("Decision", "maybe"), ("Decision", 1), ("Reasoning", {"score": 1})])
+def test_quant_model_feedback_rejects_invalid_consumed_fields(field, value):
+    payload = json.loads(_response(decision=True, observation="observed"))
+    payload[field] = value
+    with pytest.raises(ValidationError):
+        feedback_module._QuantModelFeedback.model_validate(payload)
+
+
+def test_quant_model_feedback_requires_a_decision_but_preserves_optional_text_defaults():
+    with pytest.raises(ValidationError):
+        feedback_module._QuantModelFeedback.model_validate({"Observations": "inconclusive"})
+    response = feedback_module._QuantModelFeedback.model_validate({"Decision": "yes"})
+    assert response.decision is True
+    assert response.reason == "No reasoning provided"
 
 
 def _full_result(*, scale: float) -> pd.Series:
@@ -224,10 +242,15 @@ def test_model_feedback_keeps_global_sota_metrics_but_reads_last_accepted_model(
 
 def test_model_feedback_renders_full_evidence_with_sota(monkeypatch) -> None:
     backend = Mock()
-    backend.build_messages_and_create_chat_completion.return_value = _response(
-        decision=False,
-        observation="observed",
-    )
+    payload = json.loads(_response(decision=False, observation="observed"))
+    payload.update({"Decision": " NO ", "Aligned metrics": {"annualized return": [0.17, 0.40]}})
+    response = json.dumps(payload)
+
+    def completion(**kwargs):
+        TypeAdapter(kwargs["json_target_type"]).validate_json(response)
+        return response
+
+    backend.build_messages_and_create_chat_completion.side_effect = completion
     monkeypatch.setattr(feedback_module, "APIBackend", lambda: backend)
     monkeypatch.setattr("rdagent.utils.agent.tpl.logger.log_object", lambda *_args, **_kwargs: None)
 
@@ -245,6 +268,8 @@ def test_model_feedback_renders_full_evidence_with_sota(monkeypatch) -> None:
 
     generated = QlibModelExperiment2Feedback(QuantScenario()).generate_feedback(exp, trace)
 
+    backend.build_messages_and_create_chat_completion.assert_called_once()
+    assert generated.observations == "observed"
     call = backend.build_messages_and_create_chat_completion.call_args.kwargs
     user_prompt = call["user_prompt"]
     system_prompt = call["system_prompt"]

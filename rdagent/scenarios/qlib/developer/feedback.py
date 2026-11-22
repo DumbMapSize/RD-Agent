@@ -2,11 +2,12 @@ import hashlib
 import json
 import pickle
 from pathlib import Path
-from typing import Any, Dict
+from typing import Annotated, Any, Dict
 
 import numpy as np
 import pandas as pd
 import yaml
+from pydantic import BaseModel, BeforeValidator, Field
 
 from rdagent.core.experiment import Experiment
 from rdagent.core.proposal import Experiment2Feedback, HypothesisFeedback, Trace
@@ -354,6 +355,16 @@ class QlibFactorExperiment2Feedback(Experiment2Feedback):
         )
 
 
+class _QuantModelFeedback(BaseModel):
+    """Validate the feedback we consume, not optional diagnostic tables."""
+
+    observations: str = Field(default="No observations provided", alias="Observations")
+    hypothesis_evaluation: str = Field(default="No feedback provided", alias="Feedback for Hypothesis")
+    new_hypothesis: str = Field(default="No new hypothesis provided", alias="New Hypothesis")
+    reason: str = Field(default="No reasoning provided", alias="Reasoning")
+    decision: Annotated[bool, BeforeValidator(convert2bool)] = Field(alias="Decision")
+
+
 class QlibModelExperiment2Feedback(Experiment2Feedback):
     def generate_feedback(self, exp: Experiment, trace: Trace) -> HypothesisFeedback:
         """
@@ -371,7 +382,8 @@ class QlibModelExperiment2Feedback(Experiment2Feedback):
         logger.info("Generating feedback...")
 
         # Generate the system prompt
-        if isinstance(self.scen, QlibQuantScenario):
+        is_quant = isinstance(self.scen, QlibQuantScenario)
+        if is_quant:
             sys_prompt = T("scenarios.qlib.prompts:model_feedback_generation.system").r(
                 scenario=self.scen.get_scenario_all_desc(action="model")
             )
@@ -401,7 +413,7 @@ class QlibModelExperiment2Feedback(Experiment2Feedback):
             comparison_experiment.result if comparison_experiment is not None else None,
         ) if exp.result is not None else "execution failed"
         promotion_policy = None
-        if isinstance(self.scen, QlibQuantScenario):
+        if is_quant:
             combined_result += _comparison_evidence(exp, comparison_experiment)
             promotion_policy = T("scenarios.qlib.prompts:quant_promotion_policy").r()
         user_prompt = T("scenarios.qlib.prompts:model_feedback_generation.user").r(
@@ -420,10 +432,12 @@ class QlibModelExperiment2Feedback(Experiment2Feedback):
             user_prompt=user_prompt,
             system_prompt=sys_prompt,
             json_mode=True,
-            json_target_type=Dict[str, str | bool | int],
+            json_target_type=_QuantModelFeedback if is_quant else Dict[str, str | bool | int],
         )
 
         # Parse the JSON response to extract the feedback
+        if is_quant:
+            return HypothesisFeedback(**_QuantModelFeedback.model_validate_json(response).model_dump())
         response_json_hypothesis = json.loads(response)
         return HypothesisFeedback(
             observations=response_json_hypothesis.get("Observations", "No observations provided"),
