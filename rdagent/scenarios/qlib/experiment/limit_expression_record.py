@@ -39,7 +39,15 @@ def normalize_limit_threshold(config: dict[str, Any] | None) -> dict[str, Any] |
 
 
 class LimitExpressionPortAnaRecord(PortAnaRecord):
-    """PortAnaRecord accepting a safe-YAML limit expression pair."""
+    """Daily QLib record with opening limits and historical delisting settlement."""
 
     def __init__(self, recorder, config=None, **kwargs):
         super().__init__(recorder=recorder, config=normalize_limit_threshold(config), **kwargs)
+        strategy = self.strategy_config
+        if isinstance(strategy, dict) and (
+            strategy.get("class"), strategy.get("module_path")
+        ) == ("TopkDropoutStrategy", "qlib.contrib.strategy"):
+            strategy.update({
+                "class": "HistoricalTopkDropoutStrategy",
+                "module_path": "rdagent.scenarios.qlib.experiment.delisting",
+            })
