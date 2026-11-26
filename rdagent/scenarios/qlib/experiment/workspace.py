@@ -1,8 +1,10 @@
 import re
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
+from mlflow.tracking import MlflowClient
 
 from rdagent.components.coder.model_coder.conf import MODEL_COSTEER_SETTINGS
 from rdagent.core.experiment import FBWorkspace
@@ -63,7 +65,9 @@ class QlibFBWorkspace(FBWorkspace):
         super().__init__(*args, **kwargs)
         self.inject_code_from_folder(template_folder_path)
 
-    def execute(self, qlib_config_name: str = "conf.yaml", run_env: dict = {}, *args, **kwargs) -> str:
+    def execute(
+        self, qlib_config_name: str = "conf.yaml", run_env: dict | None = None, *args, **kwargs
+    ) -> tuple[pd.Series | None, str]:
         if MODEL_COSTEER_SETTINGS.env_type == "docker":
             qtde = QTDockerEnv()
         elif MODEL_COSTEER_SETTINGS.env_type == "conda":
@@ -73,33 +77,45 @@ class QlibFBWorkspace(FBWorkspace):
             return None, "Unknown environment type"
         qtde.prepare()
 
-        # Run the Qlib backtest
-        execute_qlib_log = qtde.check_output(
+        metrics_path = self.workspace_path / "qlib_res.csv"
+        report_path = self.workspace_path / "ret.pkl"
+        metrics_path.unlink(missing_ok=True)
+        report_path.unlink(missing_ok=True)
+        # QLib records _QLIB_* environment variables as parameters on the actual run.
+        execution_id = uuid4().hex
+        result = qtde.run(
             local_path=str(self.workspace_path),
             entry=f"qrun {qlib_config_name}",
-            env=run_env,
+            env={**(run_env or {}), "_QLIB_RDAGENT_EXECUTION_ID": execution_id},
         )
-        logger.log_object(execute_qlib_log, tag="Qlib_execute_log")
+        logger.log_object(result.stdout, tag="Qlib_execute_log")
+        if result.exit_code != 0:
+            return None, f"qrun exited with code {result.exit_code}:\n{result.stdout}"
 
-        execute_log = qtde.check_output(
-            local_path=str(self.workspace_path),
-            entry="python read_exp_res.py",
-            env=run_env,
-        )
+        store = self.workspace_path.resolve() / "mlruns"
+        try:
+            client = MlflowClient(tracking_uri=store.as_uri())
+            runs = client.search_runs(
+                [exp.experiment_id for exp in client.search_experiments()],
+                filter_string=f"params._QLIB_RDAGENT_EXECUTION_ID = '{execution_id}'",
+                max_results=2,
+            )
+            if len(runs) != 1 or runs[0].info.status != "FINISHED":
+                raise ValueError("Expected one completed QLib recorder for this invocation")
+            run = runs[0]
+            metrics = pd.Series(run.data.metrics)
+            if metrics.empty:
+                raise ValueError(f"Recorder {run.info.run_id} contains no metrics")
+            # Read the mounted workspace path, including when qrun ran inside Docker.
+            artifacts = store / run.info.experiment_id / run.info.run_id / "artifacts"
+            report = pd.read_pickle(artifacts / "portfolio_analysis/report_normal_1day.pkl")
+            report.to_pickle(report_path)
+            metrics.to_csv(metrics_path)
+            metrics = pd.read_csv(metrics_path, index_col=0).iloc[:, 0]
+        except Exception as exc:
+            report_path.unlink(missing_ok=True)
+            metrics_path.unlink(missing_ok=True)
+            return None, f"QLib result extraction failed: {exc}\n{result.stdout}"
 
-        quantitative_backtesting_chart_path = self.workspace_path / "ret.pkl"
-        if quantitative_backtesting_chart_path.exists():
-            ret_df = pd.read_pickle(quantitative_backtesting_chart_path)
-            logger.log_object(ret_df, tag="Quantitative Backtesting Chart")
-        else:
-            logger.error("No result file found.")
-            return None, execute_qlib_log
-
-        qlib_res_path = self.workspace_path / "qlib_res.csv"
-        if qlib_res_path.exists():
-            # Here, we ensure that the qlib experiment has run successfully before extracting information from execute_qlib_log using regex; otherwise, we keep the original experiment stdout.
-            execute_qlib_log = _extract_training_log_summary(execute_qlib_log)
-            return pd.read_csv(qlib_res_path, index_col=0).iloc[:, 0], execute_qlib_log
-        else:
-            logger.error(f"File {qlib_res_path} does not exist.")
-            return None, execute_qlib_log
+        logger.log_object(report, tag="Quantitative Backtesting Chart")
+        return metrics, _extract_training_log_summary(result.stdout)
