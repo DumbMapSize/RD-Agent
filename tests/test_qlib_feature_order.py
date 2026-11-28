@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,7 @@ from qlib.data.dataset.handler import DataHandlerLP
 from qlib.data.dataset.loader import QlibDataLoader
 from qlib.utils import init_instance_by_config
 
+from rdagent.scenarios.qlib.experiment import feature_processors
 from rdagent.scenarios.qlib.experiment.model_training import build_model_run_env
 
 
@@ -54,7 +56,15 @@ def test_research_templates_preserve_values_and_use_the_same_column_order(
             return raw[gp_name].set_axis(names, axis=1).copy()
         return raw[gp_name].loc[:, names].copy()
 
+    def load_liquidity(instruments, fields, **kwargs):
+        return pd.DataFrame(1.0, index=index.swaplevel(), columns=fields)
+
     monkeypatch.setattr(QlibDataLoader, "load_group_df", load_group)
+    monkeypatch.setattr(
+        feature_processors,
+        "D",
+        SimpleNamespace(features=load_liquidity),
+    )
     monkeypatch.chdir(path.parent)
     handler_config = config["task"]["dataset"]["kwargs"]["handler"]
     loader = handler_config["kwargs"].get("data_loader", {})
@@ -89,10 +99,7 @@ def test_research_templates_preserve_values_and_use_the_same_column_order(
             {"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}},
             {"class": "Fillna", "kwargs": {"fields_group": "feature"}},
         ],
-        learn_processors=[
-            {"class": "DropnaLabel"},
-            {"class": "CSZScoreNorm", "kwargs": {"fields_group": "label"}},
-        ],
+        learn_processors=handler_config["kwargs"]["learn_processors"],
         label=[["Ref($close, -2) / Ref($open, -1) - 1"], ["LABEL0"]],
     )
     for data_key in (DataHandlerLP.DK_R, DataHandlerLP.DK_I, DataHandlerLP.DK_L):

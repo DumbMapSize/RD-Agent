@@ -1,6 +1,10 @@
 from pathlib import Path
 
 import pytest
+import yaml
+from jinja2 import Template
+
+from rdagent.scenarios.qlib.experiment.model_training import build_model_run_env
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,8 +40,12 @@ def test_qlib_template_keeps_research_pool_without_restricting_exchange(relative
 @pytest.mark.parametrize("relative_path", TEMPLATES)
 def test_qlib_templates_use_consistent_feature_and_label_processors(relative_path: str) -> None:
     text = (ROOT / relative_path).read_text()
+    config = yaml.safe_load(Template(text).render(**build_model_run_env({}, "Tabular", num_features=158)))
+    handler = config["data_handler_config"]
 
-    assert "class: RobustZScoreNorm" in text
-    assert "class: Fillna" in text
-    assert "class: CSZScoreNorm" in text
-    assert "class: CSRankNorm" not in text
+    assert [processor["class"] for processor in handler["infer_processors"]] == [
+        "Float64Features", "RobustZScoreNorm", "Fillna"
+    ]
+    assert [processor["class"] for processor in handler["learn_processors"]] == [
+        "DropnaLabel", "CSRiskNeutralizeLabel"
+    ]
