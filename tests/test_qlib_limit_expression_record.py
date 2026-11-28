@@ -59,8 +59,8 @@ def test_templates_use_uniform_per_instrument_limit_expression(monkeypatch, rela
 
     assert exchange_kwargs["limit_threshold"] == list(EXPRESSIONS)
     assert exchange_kwargs["deal_price"] == "open"
-    assert exchange_kwargs["open_cost"] == 0.0001
-    assert exchange_kwargs["close_cost"] == 0.0006
+    assert exchange_kwargs["open_cost"] == 0.0005
+    assert exchange_kwargs["close_cost"] == 0.0010
     assert exchange_kwargs["min_cost"] == 5
     assert port_config["strategy"]["kwargs"] == {
         "signal": "<PRED>", "topk": 20, "n_drop": 2, "forbid_all_trade_at_limit": False,

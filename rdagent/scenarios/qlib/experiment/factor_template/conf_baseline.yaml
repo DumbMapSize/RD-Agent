@@ -61,8 +61,8 @@ port_analysis_config: &port_analysis_config
                 - "OpeningLimit($limit_rate, 1)"
                 - "OpeningLimit($limit_rate, -1)"
             deal_price: open
-            open_cost: 0.0001
-            close_cost: 0.0006
+            open_cost: 0.0005
+            close_cost: 0.0010
             min_cost: 5
 task:
     model:
